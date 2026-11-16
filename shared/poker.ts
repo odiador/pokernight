@@ -93,7 +93,8 @@ export type ClientMessage =
   | { type: 'update_playlist'; playlist: PlaylistTrack[]; currentIndex: number }
   | { type: 'seek_music'; seconds: number }
   | { type: 'kick_player'; targetId: string }
-  | { type: 'join_seat' };
+  | { type: 'join_seat' }
+  | { type: 'ping' };
 
 export type ServerMessage =
   | { type: 'state'; state: GameState; yourId: string }

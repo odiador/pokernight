@@ -118,6 +118,8 @@ export class PokerRoomDO implements DurableObject {
           this.kickPlayer(playerId, msg.targetId);
         } else if (msg.type === 'join_seat') {
           this.joinSeat(playerId);
+        } else if (msg.type === 'ping') {
+          // Keep-alive heartbeat
         } else if (msg.type === 'update_playlist') {
           this.state.music = {
             ...this.state.music,
@@ -137,6 +139,8 @@ export class PokerRoomDO implements DurableObject {
           this.kickPlayer(playerId, msg.targetId);
         } else if (msg.type === 'join_seat') {
           this.joinSeat(playerId);
+        } else if (msg.type === 'ping') {
+          // Keep-alive heartbeat
         }
       } catch {
         // Ignore malformed payloads

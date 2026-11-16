@@ -65,7 +65,14 @@ export default function App() {
     const ws = new WebSocket(`${protocol}//${window.location.host}/ws?room=${encodeURIComponent(targetRoom)}`);
     wsRef.current = ws;
 
+    let pingInterval: ReturnType<typeof setInterval> | null = null;
+
     ws.onopen = () => {
+      pingInterval = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'ping' }));
+        }
+      }, 25000);
       const targetRoom = roomId.trim() || 'mesa-vip';
       window.history.replaceState(null, '', `/invitar/${encodeURIComponent(targetRoom)}`);
       const msg: ClientMessage = {
@@ -99,6 +106,7 @@ export default function App() {
     };
 
     ws.onclose = () => {
+      if (pingInterval) clearInterval(pingInterval);
       setGameState(null);
     };
   };

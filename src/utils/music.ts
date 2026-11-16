@@ -69,3 +69,24 @@ class LoungeMusicPlayer {
 }
 
 export const loungeMusic = new LoungeMusicPlayer();
+
+export function playClockTick(urgent = false): void {
+  try {
+    const AudioCtx = window.AudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(urgent ? 980 : 720, ctx.currentTime);
+    gain.gain.setValueAtTime(0.06, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.06);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.07);
+    setTimeout(() => void ctx.close(), 120);
+  } catch {
+    // Ignore audio context errors
+  }
+}

@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Bot, Check, Coins, Copy, Crown, Music, Play, Plus, Spade, Users } from 'lucide-react';
-import type { ClientMessage, GameState, MusicMode, PlayerAction, ServerMessage } from '../shared/poker.ts';
+import { Check, Clock, Coins, Copy, Crown, Music, Play, Plus, Spade } from 'lucide-react';
+import type { ClientMessage, GameState, MusicMode, PlayerAction, PlaylistTrack, ServerMessage } from '../shared/poker.ts';
 import { evaluateCurrentHand } from '../shared/evaluator.ts';
 import { PlayingCard } from './components/PlayingCard.tsx';
 import { MusicSidebar } from './components/MusicSidebar.tsx';
-import { loungeMusic } from './utils/music.ts';
+import { loungeMusic, playClockTick } from './utils/music.ts';
 
 function generateRoomCode(): string {
   return String(Math.floor(1000 + Math.random() * 9000));
@@ -39,8 +39,11 @@ export default function App() {
   const [smallBlind, setSmallBlind] = useState(10);
   const [bigBlind, setBigBlind] = useState(20);
   const [startingChips, setStartingChips] = useState(1000);
-  const [turnTimeSeconds, setTurnTimeSeconds] = useState(20);
+  const [turnTimeSeconds, setTurnTimeSeconds] = useState(30);
+  const [botCount, setBotCount] = useState(0);
+  const [roomHasActiveOwner, setRoomHasActiveOwner] = useState(false);
   const [secondsLeft, setSecondsLeft] = useState<number | null>(null);
+  const lastTickSecRef = useRef<number | null>(null);
   const [armedKey, setArmedKey] = useState<string | null>(null);
   const [musicOn, setMusicOn] = useState(false);
   const [ncsMode, setNcsMode] = useState<MusicMode>('lounge');
@@ -51,7 +54,19 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
-  const connectAndJoin = (withBots: boolean, spectate = false) => {
+  useEffect(() => {
+    if (!invitedRoom) return;
+    fetch(`/api/room-info?room=${encodeURIComponent(invitedRoom)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((info: { hasOwner?: boolean; hasActiveGame?: boolean } | null) => {
+        if (info && (info.hasOwner || info.hasActiveGame)) {
+          setRoomHasActiveOwner(true);
+        }
+      })
+      .catch(() => {});
+  }, [invitedRoom]);
+
+  const connectAndJoin = (spectate = false) => {
     const cleanName = playerName.trim();
     if (!cleanName) {
       setError('Ingresa tu nombre para entrar a la mesa.');
@@ -76,16 +91,24 @@ export default function App() {
       }, 20000);
       const targetRoom = roomId.trim() || 'mesa-vip';
       window.history.replaceState(null, '', `/invitar/${encodeURIComponent(targetRoom)}`);
+      let initialPlaylist: PlaylistTrack[] | undefined;
+      try {
+        const raw = localStorage.getItem('pokernight_playlist');
+        if (raw) initialPlaylist = JSON.parse(raw) as PlaylistTrack[];
+      } catch {
+        // Ignore invalid JSON
+      }
       const msg: ClientMessage = {
         type: 'join_room',
         roomId: targetRoom,
-        playerName: playerName.trim() || 'Jugador',
-        withBots,
+        playerName: cleanName,
+        botCount: invitedRoom ? 0 : botCount,
         smallBlind,
         bigBlind,
         startingChips,
         turnTimeSeconds,
         spectate,
+        initialPlaylist,
       };
       ws.send(JSON.stringify(msg));
     };
@@ -125,16 +148,21 @@ export default function App() {
   useEffect(() => {
     if (!gameState?.turnDeadline) {
       setSecondsLeft(null);
+      lastTickSecRef.current = null;
       return;
     }
     const update = () => {
-      const diff = Math.max(0, Math.ceil((gameState.turnDeadline! - Date.now()) / 1000));
+      const diff = Math.max(0, Math.ceil((gameState.turnDeadline! - (Date.now() + clockOffset)) / 1000));
       setSecondsLeft(diff);
+      if (diff > 0 && diff <= 10 && lastTickSecRef.current !== diff) {
+        lastTickSecRef.current = diff;
+        playClockTick(diff <= 3);
+      }
     };
     update();
-    const id = setInterval(update, 250);
+    const id = setInterval(update, 200);
     return () => clearInterval(id);
-  }, [gameState?.turnDeadline]);
+  }, [gameState?.turnDeadline, clockOffset]);
 
   const send = (msg: ClientMessage) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -212,7 +240,7 @@ export default function App() {
           <div className="space-y-4">
             {invitedRoom && (
               <div className="rounded-xl bg-emerald-500/10 border border-emerald-500/30 px-3.5 py-2.5 text-xs text-emerald-300">
-                Invitación directa a la mesa <strong className="text-white">{invitedRoom}</strong>
+                Has sido invitado a una partida privada
               </div>
             )}
             <div>
@@ -221,99 +249,120 @@ export default function App() {
                 required
                 value={playerName}
                 onChange={(e) => setPlayerName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    connectAndJoin(Boolean(invitedRoom && roomHasActiveOwner));
+                  }
+                }}
                 className="w-full rounded-xl bg-zinc-950 border border-zinc-800 px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500"
                 placeholder="Tu nombre (obligatorio)"
               />
             </div>
-            <div className="flex items-center justify-between rounded-xl bg-zinc-950 border border-zinc-800 px-3.5 py-2.5">
-              <span className="text-xs font-medium text-zinc-400">Código de mesa</span>
-              <span className="text-sm font-mono font-bold tracking-widest text-emerald-400">{roomId}</span>
-            </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-              {[
-                {
-                  label: 'Ciega Peq.',
-                  value: smallBlind,
-                  step: 5,
-                  min: 5,
-                  prefix: '$',
-                  setter: setSmallBlind,
-                },
-                {
-                  label: 'Ciega Gr.',
-                  value: bigBlind,
-                  step: 10,
-                  min: 10,
-                  prefix: '$',
-                  setter: setBigBlind,
-                },
-                {
-                  label: 'Fichas',
-                  value: startingChips,
-                  step: 500,
-                  min: 500,
-                  prefix: '$',
-                  setter: setStartingChips,
-                },
-                {
-                  label: 'Turno (s)',
-                  value: turnTimeSeconds,
-                  step: 5,
-                  min: 10,
-                  prefix: '',
-                  setter: setTurnTimeSeconds,
-                },
-              ].map((item) => (
-                <div key={item.label} className="rounded-xl bg-zinc-950 border border-zinc-800 p-2">
-                  <div className="text-[10px] font-medium text-zinc-400 mb-1 text-center">{item.label}</div>
-                  <div className="flex items-center justify-between gap-1">
-                    <button
-                      type="button"
-                      onClick={() => item.setter(Math.max(item.min, item.value - item.step))}
-                      className="w-6 h-6 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-300 text-xs font-bold flex items-center justify-center cursor-pointer"
-                    >
-                      -
-                    </button>
-                    <span className="text-xs font-semibold text-white">
-                      {item.prefix}
-                      {item.value}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => item.setter(item.value + item.step)}
-                      className="w-6 h-6 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-300 text-xs font-bold flex items-center justify-center cursor-pointer"
-                    >
-                      +
-                    </button>
+            {!invitedRoom && (
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
+                {[
+                  {
+                    label: 'Ciega Peq.',
+                    value: smallBlind,
+                    step: 5,
+                    min: 5,
+                    max: 500,
+                    prefix: '$',
+                    setter: setSmallBlind,
+                  },
+                  {
+                    label: 'Ciega Gr.',
+                    value: bigBlind,
+                    step: 10,
+                    min: 10,
+                    max: 1000,
+                    prefix: '$',
+                    setter: setBigBlind,
+                  },
+                  {
+                    label: 'Fichas',
+                    value: startingChips,
+                    step: 500,
+                    min: 500,
+                    max: 50000,
+                    prefix: '$',
+                    setter: setStartingChips,
+                  },
+                  {
+                    label: 'Turno (s)',
+                    value: turnTimeSeconds,
+                    step: 5,
+                    min: 10,
+                    max: 120,
+                    prefix: '',
+                    setter: setTurnTimeSeconds,
+                  },
+                  {
+                    label: 'Bots IA',
+                    value: botCount,
+                    step: 1,
+                    min: 0,
+                    max: 5,
+                    prefix: '',
+                    setter: setBotCount,
+                  },
+                ].map((item) => (
+                  <div key={item.label} className="rounded-xl bg-zinc-950 border border-zinc-800 p-2">
+                    <div className="text-[10px] font-medium text-zinc-400 mb-1 text-center">{item.label}</div>
+                    <div className="flex items-center justify-between gap-1">
+                      <button
+                        type="button"
+                        onClick={() => item.setter(Math.max(item.min, item.value - item.step))}
+                        className="w-6 h-6 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-300 text-xs font-bold flex items-center justify-center cursor-pointer"
+                      >
+                        -
+                      </button>
+                      <span className="text-xs font-semibold text-white">
+                        {item.prefix}
+                        {item.value}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => item.setter(Math.min(item.max, item.value + item.step))}
+                        className="w-6 h-6 rounded-lg bg-zinc-900 hover:bg-zinc-800 text-zinc-300 text-xs font-bold flex items-center justify-center cursor-pointer"
+                      >
+                        +
+                      </button>
+                    </div>
                   </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
 
             {error && <p className="text-xs text-rose-400">{error}</p>}
 
-            <div className="grid grid-cols-3 gap-2.5 pt-2">
-              <button
-                onClick={() => connectAndJoin(true, false)}
-                className="flex items-center justify-center gap-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-semibold py-2.5 px-3 text-xs sm:text-sm transition cursor-pointer"
-              >
-                <Bot className="w-4 h-4" />
-                vs IA
-              </button>
-              <button
-                onClick={() => connectAndJoin(false, false)}
-                className="flex items-center justify-center gap-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-white font-semibold py-2.5 px-3 text-xs sm:text-sm transition cursor-pointer"
-              >
-                <Users className="w-4 h-4" />
-                Mesa Online
-              </button>
-              <button
-                onClick={() => connectAndJoin(false, true)}
-                className="flex items-center justify-center gap-1.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-zinc-300 font-semibold py-2.5 px-3 text-xs sm:text-sm transition cursor-pointer"
-              >
-                Espectear
-              </button>
+            <div className="pt-2 flex gap-2.5">
+              {invitedRoom ? (
+                <>
+                  <button
+                    onClick={() => connectAndJoin(false)}
+                    className="flex-1 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-semibold py-2.5 px-4 text-sm transition cursor-pointer"
+                  >
+                    Entrar a jugar
+                  </button>
+                  {roomHasActiveOwner && (
+                    <button
+                      onClick={() => connectAndJoin(true)}
+                      className="rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-zinc-200 font-semibold py-2.5 px-4 text-sm transition cursor-pointer"
+                    >
+                      Espectear
+                    </button>
+                  )}
+                </>
+              ) : (
+                <button
+                  onClick={() => connectAndJoin(false)}
+                  className="w-full rounded-xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-semibold py-2.5 px-4 text-sm transition cursor-pointer"
+                >
+                  Crear sala
+                </button>
+              )}
             </div>
           </div>
         </motion.div>
@@ -331,12 +380,34 @@ export default function App() {
             <Spade className="w-5 h-5 text-emerald-400" />
             Poker Night
           </span>
-          <span className="text-xs px-2.5 py-1 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400">
-            Mesa: <strong className="text-zinc-200">{gameState.roomId}</strong>
-          </span>
+          {isSpectator && (
+            <div className="flex items-center gap-2">
+              <span className="text-xs px-2.5 py-1 rounded-full bg-zinc-900 border border-zinc-700 text-zinc-300">
+                Espectador: <strong className="text-white">{playerName}</strong>
+              </span>
+              <button
+                onClick={() => send({ type: 'join_seat' })}
+                className="text-xs font-semibold px-3 py-1 rounded-full bg-emerald-500 hover:bg-emerald-400 text-zinc-950 transition cursor-pointer"
+              >
+                Entrar al siguiente juego
+              </button>
+            </div>
+          )}
           <span className="text-xs px-2.5 py-1 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400 uppercase">
             {gameState.phase}
           </span>
+          {secondsLeft !== null && gameState.phase !== 'waiting' && gameState.phase !== 'showdown' && (
+            <span
+              className={`flex items-center gap-1.5 text-xs font-mono font-bold px-2.5 py-1 rounded-full border ${
+                secondsLeft <= 10
+                  ? 'bg-rose-500/20 text-rose-300 border-rose-500/50 animate-pulse'
+                  : 'bg-zinc-900 text-zinc-200 border-zinc-700'
+              }`}
+            >
+              <Clock className="w-3.5 h-3.5" />
+              {secondsLeft}s
+            </span>
+          )}
         </div>
 
         <div className="flex items-center gap-2">
@@ -485,7 +556,19 @@ export default function App() {
                     )}
                   </div>
                 </div>
-                <div className="text-xs text-emerald-400 font-medium mb-2">${p.chips}</div>
+                <div className="flex items-center justify-between text-xs text-emerald-400 font-medium mb-2">
+                  <span>${p.chips}</span>
+                  {isTurn && secondsLeft !== null && (
+                    <span
+                      className={`inline-flex items-center gap-1 font-mono font-bold px-1.5 py-0.5 rounded ${
+                        secondsLeft <= 10 ? 'bg-rose-500/25 text-rose-300 animate-pulse' : 'bg-zinc-800 text-zinc-200'
+                      }`}
+                    >
+                      <Clock className="w-3 h-3" />
+                      {secondsLeft}s
+                    </span>
+                  )}
+                </div>
 
                 <div className="flex items-center gap-1.5 min-h-[64px]">
                   <AnimatePresence>
@@ -544,6 +627,7 @@ export default function App() {
         onUpdatePlaylist={(playlist, currentIndex) => {
           loungeMusic.stop();
           setMusicOn(true);
+          localStorage.setItem('pokernight_playlist', JSON.stringify(playlist));
           send({ type: 'update_playlist', playlist, currentIndex });
         }}
         onSeek={(seconds) => send({ type: 'seek_music', seconds })}

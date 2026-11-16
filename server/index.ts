@@ -34,8 +34,10 @@ wss.on('connection', (ws) => {
           bigBlind: msg.bigBlind,
           startingChips: msg.startingChips,
           turnTimeSeconds: msg.turnTimeSeconds,
+          initialPlaylist: msg.initialPlaylist,
         });
-        currentRoom.addPlayer(playerId, msg.playerName, ws, msg.withBots, msg.spectate);
+        const bots = msg.botCount ?? (msg.withBots ? 3 : 0);
+        currentRoom.addPlayer(playerId, msg.playerName, ws, bots, msg.spectate);
       } else if (msg.type === 'start_hand' && currentRoom) {
         currentRoom.startHand();
       } else if (msg.type === 'add_bot' && currentRoom) {

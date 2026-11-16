@@ -211,6 +211,24 @@ export function MusicSidebar({
 
   const handleAddTrack = async () => {
     const raw = newUrl.trim();
+    const remoteRoomMatch = raw.match(/invitar\/([A-Za-z0-9_-]+)/);
+    if (remoteRoomMatch || /^\d{4}$/.test(raw)) {
+      const targetRoom = remoteRoomMatch ? remoteRoomMatch[1] : raw;
+      const origin = raw.startsWith('http') ? new URL(raw).origin : '';
+      try {
+        const res = await fetch(`${origin}/api/room-info?room=${encodeURIComponent(targetRoom)}`);
+        if (res.ok) {
+          const info = (await res.json()) as { playlist?: PlaylistTrack[] };
+          if (info.playlist && info.playlist.length > 0) {
+            onUpdatePlaylist(info.playlist, 0);
+            setNewUrl('');
+            return;
+          }
+        }
+      } catch {
+        // Ignore remote room fetch error
+      }
+    }
     const listMatch = raw.match(/[?&]list=([A-Za-z0-9_-]+)/);
     const vidMatch = raw.match(/(?:v=|youtu\.be\/|embed\/)([A-Za-z0-9_-]{11})/);
     if (listMatch) {

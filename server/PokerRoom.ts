@@ -39,6 +39,7 @@ export class PokerRoom {
   private actedThisRound = new Set<string>();
   private botTimer: ReturnType<typeof setTimeout> | null = null;
   private turnTimer: ReturnType<typeof setTimeout> | null = null;
+  private autoNextTimer: ReturnType<typeof setTimeout> | null = null;
   private ownerInactivityTimer: ReturnType<typeof setTimeout> | null = null;
   private startingChips = 1000;
 
@@ -59,7 +60,7 @@ export class PokerRoom {
       handNumber: 0,
       smallBlind: 10,
       bigBlind: 20,
-      turnTimeSeconds: 20,
+      turnTimeSeconds: 30,
       music: {
         mode: 'lounge',
         startedAt: Date.now(),
@@ -74,7 +75,13 @@ export class PokerRoom {
     };
   }
 
-  configure(options: { smallBlind?: number; bigBlind?: number; startingChips?: number; turnTimeSeconds?: number }): void {
+  configure(options: {
+    smallBlind?: number;
+    bigBlind?: number;
+    startingChips?: number;
+    turnTimeSeconds?: number;
+    initialPlaylist?: PlaylistTrack[];
+  }): void {
     if (this.state.handNumber > 0 || this.state.players.length > 0) return;
     if (options.smallBlind && options.smallBlind > 0) {
       this.state.smallBlind = options.smallBlind;
@@ -89,9 +96,12 @@ export class PokerRoom {
     if (options.turnTimeSeconds && options.turnTimeSeconds >= 5) {
       this.state.turnTimeSeconds = options.turnTimeSeconds;
     }
+    if (options.initialPlaylist && options.initialPlaylist.length > 0) {
+      this.state.music.playlist = options.initialPlaylist;
+    }
   }
 
-  addPlayer(id: string, name: string, ws: WebSocket, withBots = false, spectate = false): void {
+  addPlayer(id: string, name: string, ws: WebSocket, botCount = 0, spectate = false): void {
     const existing = this.state.players.find((p) => p.id === id);
     if (existing) {
       this.sockets.set(id, ws);
@@ -140,13 +150,15 @@ export class PokerRoom {
       holeCards: [],
     });
 
-    if (withBots && this.state.players.length === 1) {
-      this.addBot();
-      this.addBot();
-      this.addBot();
+    if (botCount > 0 && this.state.players.length === 1) {
+      const count = Math.min(5, botCount);
+      for (let i = 0; i < count; i++) {
+        this.addBot();
+      }
     }
 
     this.broadcastState();
+    this.scheduleAutoStartIfReady(1200);
   }
 
   addBot(): void {
@@ -212,6 +224,7 @@ export class PokerRoom {
       holeCards: [],
     });
     this.broadcastState();
+    this.scheduleAutoStartIfReady(1200);
   }
 
   kickPlayer(requesterId: string, targetId: string): void {
@@ -254,6 +267,7 @@ export class PokerRoom {
     if (this.state.players.length < 2) return;
 
     if (this.botTimer) clearTimeout(this.botTimer);
+    if (this.autoNextTimer) clearTimeout(this.autoNextTimer);
     this.deck = createShuffledDeck();
     this.actedThisRound.clear();
     this.state.handNumber += 1;
@@ -414,6 +428,7 @@ export class PokerRoom {
       },
     ];
     this.broadcastState();
+    this.scheduleAutoStartIfReady(5000);
   }
 
   private resolveShowdown(): void {
@@ -445,6 +460,18 @@ export class PokerRoom {
 
     this.state.winners = winnerInfos;
     this.broadcastState();
+    this.scheduleAutoStartIfReady(5000);
+  }
+
+  private scheduleAutoStartIfReady(delayMs: number): void {
+    if (this.autoNextTimer) clearTimeout(this.autoNextTimer);
+    if (this.state.phase !== 'waiting' && this.state.phase !== 'showdown') return;
+    if (this.state.players.length < 2) return;
+    this.autoNextTimer = setTimeout(() => {
+      if ((this.state.phase === 'waiting' || this.state.phase === 'showdown') && this.state.players.length >= 2) {
+        this.startHand();
+      }
+    }, delayMs);
   }
 
   private nextActiveIndex(from: number): number {

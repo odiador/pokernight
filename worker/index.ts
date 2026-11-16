@@ -42,6 +42,7 @@ export class PokerRoomDO implements DurableObject {
   private sockets = new Map<string, WebSocket>();
   private actedThisRound = new Set<string>();
   private turnTimer: ReturnType<typeof setTimeout> | null = null;
+  private autoNextTimer: ReturnType<typeof setTimeout> | null = null;
   private ownerInactivityTimer: ReturnType<typeof setTimeout> | null = null;
   private startingChips = 1000;
 
@@ -64,7 +65,7 @@ export class PokerRoomDO implements DurableObject {
       handNumber: 0,
       smallBlind: 10,
       bigBlind: 20,
-      turnTimeSeconds: 20,
+      turnTimeSeconds: 30,
       music: {
         mode: 'lounge',
         startedAt: Date.now(),
@@ -86,6 +87,14 @@ export class PokerRoomDO implements DurableObject {
   }
 
   async fetch(request: Request): Promise<Response> {
+    const url = new URL(request.url);
+    if (url.pathname === '/info') {
+      return Response.json({
+        hasOwner: Boolean(this.state.ownerId),
+        hasActiveGame: this.state.phase !== 'waiting' || this.state.players.length > 0,
+        playlist: this.state.music.playlist,
+      });
+    }
     if (request.headers.get('Upgrade') !== 'websocket') {
       return new Response('Expected WebSocket', { status: 426 });
     }
@@ -119,8 +128,13 @@ export class PokerRoomDO implements DurableObject {
           }
           if (msg.startingChips && msg.startingChips >= 100) this.startingChips = msg.startingChips;
           if (msg.turnTimeSeconds && msg.turnTimeSeconds >= 5) this.state.turnTimeSeconds = msg.turnTimeSeconds;
+          if (msg.initialPlaylist && msg.initialPlaylist.length > 0) {
+            this.state.music.playlist = msg.initialPlaylist;
+            void this.ctx.storage.put('playlist', msg.initialPlaylist);
+          }
         }
-        this.addPlayer(playerId, msg.playerName, ws, msg.withBots, msg.spectate);
+        const bots = msg.botCount ?? (msg.withBots ? 3 : 0);
+        this.addPlayer(playerId, msg.playerName, ws, bots, msg.spectate);
       } else if (msg.type === 'start_hand') {
         if (playerId === this.state.ownerId) this.startHand();
       } else if (msg.type === 'add_bot') {
@@ -171,7 +185,7 @@ export class PokerRoomDO implements DurableObject {
     if (playerId) this.removePlayer(playerId);
   }
 
-  private addPlayer(id: string, name: string, ws: WebSocket, withBots = false, spectate = false): void {
+  private addPlayer(id: string, name: string, ws: WebSocket, botCount = 0, spectate = false): void {
     const cleanName = name.trim();
     if (!cleanName) {
       ws.send(JSON.stringify({ type: 'error', message: 'El nombre es obligatorio.' } satisfies ServerMessage));
@@ -210,12 +224,14 @@ export class PokerRoomDO implements DurableObject {
       seat: this.state.players.length,
       holeCards: [],
     });
-    if (withBots && this.state.players.length === 1) {
-      this.addBot();
-      this.addBot();
-      this.addBot();
+    if (botCount > 0 && this.state.players.length === 1) {
+      const count = Math.min(5, botCount);
+      for (let i = 0; i < count; i++) {
+        this.addBot();
+      }
     }
     this.broadcastState();
+    this.scheduleAutoStartIfReady(1200);
   }
 
   private addBot(): void {
@@ -235,6 +251,7 @@ export class PokerRoomDO implements DurableObject {
       holeCards: [],
     });
     this.broadcastState();
+    this.scheduleAutoStartIfReady(1200);
   }
 
   private removePlayer(id: string): void {
@@ -273,6 +290,7 @@ export class PokerRoomDO implements DurableObject {
       holeCards: [],
     });
     this.broadcastState();
+    this.scheduleAutoStartIfReady(1200);
   }
 
   private kickPlayer(requesterId: string, targetId: string): void {
@@ -305,6 +323,7 @@ export class PokerRoomDO implements DurableObject {
   }
 
   private startHand(): void {
+    if (this.autoNextTimer) clearTimeout(this.autoNextTimer);
     for (const p of this.state.players) {
       if (p.chips <= 0) p.chips = this.startingChips;
     }
@@ -400,6 +419,7 @@ export class PokerRoomDO implements DurableObject {
       this.state.phase = 'showdown';
       this.state.winners = [{ playerId: inHand[0].id, playerName: inHand[0].name, amount: this.state.pot, handName: 'Todos se retiraron' }];
       this.broadcastState();
+      this.scheduleAutoStartIfReady(5000);
       return;
     }
     const canAct = inHand.filter((p) => !p.allIn);
@@ -462,6 +482,18 @@ export class PokerRoomDO implements DurableObject {
       return { playerId: w.player.id, playerName: w.player.name, amount: share, handName: w.handName };
     });
     this.broadcastState();
+    this.scheduleAutoStartIfReady(5000);
+  }
+
+  private scheduleAutoStartIfReady(delayMs: number): void {
+    if (this.autoNextTimer) clearTimeout(this.autoNextTimer);
+    if (this.state.phase !== 'waiting' && this.state.phase !== 'showdown') return;
+    if (this.state.players.length < 2) return;
+    this.autoNextTimer = setTimeout(() => {
+      if ((this.state.phase === 'waiting' || this.state.phase === 'showdown') && this.state.players.length >= 2) {
+        this.startHand();
+      }
+    }, delayMs);
   }
 
   private nextActiveIndex(from: number): number {
@@ -548,6 +580,11 @@ export default {
       const room = url.searchParams.get('room') || 'mesa-vip';
       const id = env.POKER_ROOM.idFromName(room);
       return env.POKER_ROOM.get(id).fetch(request);
+    }
+    if (url.pathname === '/api/room-info') {
+      const room = url.searchParams.get('room') || 'mesa-vip';
+      const id = env.POKER_ROOM.idFromName(room);
+      return env.POKER_ROOM.get(id).fetch(new Request('https://internal/info'));
     }
     if (url.pathname === '/api/yt-search') {
       const q = url.searchParams.get('q')?.trim();

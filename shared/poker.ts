@@ -83,7 +83,9 @@ export type ClientMessage =
       bigBlind?: number;
       startingChips?: number;
       turnTimeSeconds?: number;
+      botCount?: number;
       spectate?: boolean;
+      initialPlaylist?: PlaylistTrack[];
     }
   | { type: 'start_hand' }
   | { type: 'action'; action: PlayerAction; amount?: number }

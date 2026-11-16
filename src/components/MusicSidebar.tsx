@@ -66,12 +66,32 @@ export function MusicSidebar({
   const startedAt = gameState.music?.startedAt ?? 0;
 
   useEffect(() => {
+    if (ncsMode === 'lounge' || !startedAt) return;
+    const expected = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+    setElapsedSec(expected);
+    iframeRef.current?.contentWindow?.postMessage(
+      JSON.stringify({ event: 'command', func: 'seekTo', args: [expected, true] }),
+      '*'
+    );
+  }, [startedAt, ncsMode]);
+
+  useEffect(() => {
     if (ncsMode === 'lounge') return;
     iframeRef.current?.contentWindow?.postMessage(
       JSON.stringify({ event: 'command', func: musicOn ? 'playVideo' : 'pauseVideo', args: [] }),
       '*'
     );
   }, [musicOn, ncsMode]);
+
+  useEffect(() => {
+    if (ncsMode === 'lounge' || !startedAt) return;
+    const expected = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+    setElapsedSec(expected);
+    iframeRef.current?.contentWindow?.postMessage(
+      JSON.stringify({ event: 'command', func: 'seekTo', args: [expected, true] }),
+      '*'
+    );
+  }, [startedAt, ncsMode]);
 
   useEffect(() => {
     setDurationSec(null);
@@ -85,12 +105,32 @@ export function MusicSidebar({
   }, [currentTrack?.id, ncsMode]);
 
   useEffect(() => {
+    if (ncsMode === 'lounge' || !startedAt) return;
+    const expected = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+    setElapsedSec(expected);
+    iframeRef.current?.contentWindow?.postMessage(
+      JSON.stringify({ event: 'command', func: 'seekTo', args: [expected, true] }),
+      '*'
+    );
+  }, [startedAt, ncsMode]);
+
+  useEffect(() => {
     if (ncsMode === 'lounge') return;
     iframeRef.current?.contentWindow?.postMessage(
       JSON.stringify({ event: 'command', func: musicOn ? 'playVideo' : 'pauseVideo', args: [] }),
       '*'
     );
   }, [musicOn, ncsMode]);
+
+  useEffect(() => {
+    if (ncsMode === 'lounge' || !startedAt) return;
+    const expected = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+    setElapsedSec(expected);
+    iframeRef.current?.contentWindow?.postMessage(
+      JSON.stringify({ event: 'command', func: 'seekTo', args: [expected, true] }),
+      '*'
+    );
+  }, [startedAt, ncsMode]);
 
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
@@ -121,6 +161,16 @@ export function MusicSidebar({
   }, [startedAt, seekDraft, onSeek]);
 
   useEffect(() => {
+    if (ncsMode === 'lounge' || !startedAt) return;
+    const expected = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+    setElapsedSec(expected);
+    iframeRef.current?.contentWindow?.postMessage(
+      JSON.stringify({ event: 'command', func: 'seekTo', args: [expected, true] }),
+      '*'
+    );
+  }, [startedAt, ncsMode]);
+
+  useEffect(() => {
     if (ncsMode === 'lounge') return;
     iframeRef.current?.contentWindow?.postMessage(
       JSON.stringify({ event: 'command', func: musicOn ? 'playVideo' : 'pauseVideo', args: [] }),
@@ -129,11 +179,31 @@ export function MusicSidebar({
   }, [musicOn, ncsMode]);
 
   useEffect(() => {
+    if (ncsMode === 'lounge' || !startedAt) return;
+    const expected = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+    setElapsedSec(expected);
+    iframeRef.current?.contentWindow?.postMessage(
+      JSON.stringify({ event: 'command', func: 'seekTo', args: [expected, true] }),
+      '*'
+    );
+  }, [startedAt, ncsMode]);
+
+  useEffect(() => {
     iframeRef.current?.contentWindow?.postMessage(
       JSON.stringify({ event: 'command', func: 'setVolume', args: [volume] }),
       '*'
     );
   }, [volume]);
+
+  useEffect(() => {
+    if (ncsMode === 'lounge' || !startedAt) return;
+    const expected = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+    setElapsedSec(expected);
+    iframeRef.current?.contentWindow?.postMessage(
+      JSON.stringify({ event: 'command', func: 'seekTo', args: [expected, true] }),
+      '*'
+    );
+  }, [startedAt, ncsMode]);
 
   useEffect(() => {
     if (ncsMode === 'lounge') return;
@@ -146,12 +216,32 @@ export function MusicSidebar({
   // elapsedSec is driven directly by YouTube infoDelivery currentTime
 
   useEffect(() => {
+    if (ncsMode === 'lounge' || !startedAt) return;
+    const expected = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+    setElapsedSec(expected);
+    iframeRef.current?.contentWindow?.postMessage(
+      JSON.stringify({ event: 'command', func: 'seekTo', args: [expected, true] }),
+      '*'
+    );
+  }, [startedAt, ncsMode]);
+
+  useEffect(() => {
     if (ncsMode === 'lounge') return;
     iframeRef.current?.contentWindow?.postMessage(
       JSON.stringify({ event: 'command', func: musicOn ? 'playVideo' : 'pauseVideo', args: [] }),
       '*'
     );
   }, [musicOn, ncsMode]);
+
+  useEffect(() => {
+    if (ncsMode === 'lounge' || !startedAt) return;
+    const expected = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+    setElapsedSec(expected);
+    iframeRef.current?.contentWindow?.postMessage(
+      JSON.stringify({ event: 'command', func: 'seekTo', args: [expected, true] }),
+      '*'
+    );
+  }, [startedAt, ncsMode]);
 
   useEffect(() => {
     const q = newTitle.trim();

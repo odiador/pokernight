@@ -36,6 +36,7 @@ function createShuffledDeck(): Card[] {
 }
 
 export class PokerRoomDO implements DurableObject {
+  private ctx: DurableObjectState;
   private state: GameState;
   private deck: Card[] = [];
   private sockets = new Map<string, WebSocket>();
@@ -44,7 +45,8 @@ export class PokerRoomDO implements DurableObject {
   private ownerInactivityTimer: ReturnType<typeof setTimeout> | null = null;
   private startingChips = 1000;
 
-  constructor(_ctx: DurableObjectState) {
+  constructor(ctx: DurableObjectState) {
+    this.ctx = ctx;
     this.state = {
       roomId: 'mesa-vip',
       ownerId: undefined,
@@ -74,6 +76,12 @@ export class PokerRoomDO implements DurableObject {
         ],
       },
     };
+    this.ctx.blockConcurrencyWhile(async () => {
+      const saved = await this.ctx.storage.get<PlaylistTrack[]>('playlist');
+      if (saved && saved.length > 0) {
+        this.state.music.playlist = saved;
+      }
+    });
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -128,6 +136,7 @@ export class PokerRoomDO implements DurableObject {
             currentIndex: Math.max(0, Math.min(msg.currentIndex, msg.playlist.length - 1)),
             startedAt: Date.now(),
           };
+          void this.ctx.storage.put('playlist', msg.playlist);
           this.broadcastState();
         } else if (msg.type === 'seek_music') {
           this.state.music = {

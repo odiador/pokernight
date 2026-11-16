@@ -1,0 +1,19 @@
+name = "pokernight"
+main = "worker/index.ts"
+compatibility_date = "2026-11-01"
+
+routes = [
+  { pattern = "poker.odiador.dev", custom_domain = true }
+]
+
+[assets]
+directory = "./dist"
+not_found_handling = "single-page-application"
+
+[[durable_objects.bindings]]
+name = "POKER_ROOM"
+class_name = "PokerRoomDO"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["PokerRoomDO"]

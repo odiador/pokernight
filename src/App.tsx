@@ -45,6 +45,7 @@ export default function App() {
   const [musicOn, setMusicOn] = useState(false);
   const [ncsMode, setNcsMode] = useState<MusicMode>('lounge');
   const [showMusicMenu, setShowMusicMenu] = useState(() => localStorage.getItem('pokernight_sidebar_open') === 'true');
+  const [clockOffset, setClockOffset] = useState(0);
   const [raiseAmount, setRaiseAmount] = useState(40);
   const [copiedInvite, setCopiedInvite] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -70,9 +71,9 @@ export default function App() {
     ws.onopen = () => {
       pingInterval = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
-          ws.send(JSON.stringify({ type: 'ping' }));
+          ws.send('ping');
         }
-      }, 25000);
+      }, 20000);
       const targetRoom = roomId.trim() || 'mesa-vip';
       window.history.replaceState(null, '', `/invitar/${encodeURIComponent(targetRoom)}`);
       const msg: ClientMessage = {
@@ -90,8 +91,12 @@ export default function App() {
     };
 
     ws.onmessage = (event) => {
+      if (event.data === 'pong') return;
       const msg = JSON.parse(event.data) as ServerMessage;
       if (msg.type === 'state') {
+        if (msg.serverNow) {
+          setClockOffset(msg.serverNow - Date.now());
+        }
         setGameState(msg.state);
         setYourId(msg.yourId);
         setRaiseAmount(msg.state.currentBet + msg.state.minRaise);
@@ -521,6 +526,7 @@ export default function App() {
         musicOn={musicOn}
         ncsMode={ncsMode}
         isOwner={isOwner}
+        clockOffset={clockOffset}
         onToggleMusic={() => {
           if (ncsMode === 'lounge') {
             setMusicOn(loungeMusic.toggle());

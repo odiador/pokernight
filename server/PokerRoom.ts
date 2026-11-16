@@ -543,7 +543,7 @@ export class PokerRoom {
               : p.holeCards.map(() => ({ suit: 'spades', rank: '2' })),
         })),
       };
-      const msg: ServerMessage = { type: 'state', state: sanitized, yourId: playerId };
+      const msg: ServerMessage = { type: 'state', state: sanitized, yourId: playerId, serverNow: Date.now() };
       ws.send(JSON.stringify(msg));
     }
   }

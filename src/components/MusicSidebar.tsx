@@ -1,5 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { GripVertical, Maximize2, Minimize2, Music, Pause, Pin, PinOff, Play, Plus, SkipBack, SkipForward, Users, Volume2, VolumeX, X } from 'lucide-react';
+import {
+  GripVertical,
+  Maximize2,
+  Minimize2,
+  Music,
+  Pause,
+  Pin,
+  PinOff,
+  Play,
+  Plus,
+  SkipBack,
+  SkipForward,
+  Users,
+  Volume2,
+} from 'lucide-react';
+import { X } from 'lucide-react';
 import type { GameState, MusicMode, PlaylistTrack } from '../../shared/poker.ts';
 
 interface MusicSidebarProps {
@@ -9,6 +24,7 @@ interface MusicSidebarProps {
   musicOn: boolean;
   ncsMode: MusicMode;
   isOwner: boolean;
+  clockOffset: number;
   onToggleMusic: () => void;
   onSelectMode: (mode: MusicMode) => void;
   onUpdatePlaylist: (playlist: PlaylistTrack[], currentIndex: number) => void;
@@ -38,6 +54,7 @@ export function MusicSidebar({
   musicOn,
   ncsMode,
   isOwner,
+  clockOffset,
   onToggleMusic,
   onSelectMode,
   onUpdatePlaylist,
@@ -53,7 +70,9 @@ export function MusicSidebar({
   const [seekDraft, setSeekDraft] = useState<number | null>(null);
   const [volume, setVolume] = useState(() => {
     const saved = Number(localStorage.getItem('pokernight_volume'));
-    return Number.isFinite(saved) && saved >= 0 && saved <= 100 && localStorage.getItem('pokernight_volume') !== null ? saved : 70;
+    return Number.isFinite(saved) && saved >= 0 && saved <= 100 && localStorage.getItem('pokernight_volume') !== null
+      ? saved
+      : 70;
   });
   const [toastTitle, setToastTitle] = useState<string | null>(null);
   const [isPinned, setIsPinned] = useState(() => localStorage.getItem('pokernight_sidebar_pinned') === 'true');
@@ -62,22 +81,38 @@ export function MusicSidebar({
   const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const endedHandledRef = useRef<string | null>(null);
+  const lastDriftFixRef = useRef(0);
 
   const playlist = gameState.music?.playlist ?? [];
   const currentIndex = gameState.music?.currentIndex ?? 0;
   const currentTrack = playlist[currentIndex];
   const startedAt = gameState.music?.startedAt ?? 0;
 
-  useEffect(() => {
-    if (ncsMode === 'lounge' || !startedAt) return;
-    const expected = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
-    setElapsedSec(expected);
+  const getExpectedSeconds = () =>
+    startedAt ? Math.max(0, Math.floor((Date.now() + clockOffset - startedAt) / 1000)) : 0;
+
+  const seekIframeTo = (sec: number) => {
     iframeRef.current?.contentWindow?.postMessage(
-      JSON.stringify({ event: 'command', func: 'seekTo', args: [expected, true] }),
+      JSON.stringify({ event: 'command', func: 'seekTo', args: [sec, true] }),
       '*'
     );
+    if (musicOn) {
+      iframeRef.current?.contentWindow?.postMessage(
+        JSON.stringify({ event: 'command', func: 'playVideo', args: [] }),
+        '*'
+      );
+    }
+  };
+
+  // Sync when server updates startedAt (from any client)
+  useEffect(() => {
+    if (ncsMode === 'lounge' || !startedAt) return;
+    const expected = getExpectedSeconds();
+    setElapsedSec(expected);
+    seekIframeTo(expected);
   }, [startedAt, ncsMode]);
 
+  // Play / pause sync
   useEffect(() => {
     if (ncsMode === 'lounge') return;
     iframeRef.current?.contentWindow?.postMessage(
@@ -86,16 +121,7 @@ export function MusicSidebar({
     );
   }, [musicOn, ncsMode]);
 
-  useEffect(() => {
-    if (ncsMode === 'lounge' || !startedAt) return;
-    const expected = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
-    setElapsedSec(expected);
-    iframeRef.current?.contentWindow?.postMessage(
-      JSON.stringify({ event: 'command', func: 'seekTo', args: [expected, true] }),
-      '*'
-    );
-  }, [startedAt, ncsMode]);
-
+  // Reset track metadata + show toast on song change
   useEffect(() => {
     setDurationSec(null);
     setElapsedSec(0);
@@ -107,34 +133,7 @@ export function MusicSidebar({
     return () => clearTimeout(t);
   }, [currentTrack?.id, ncsMode]);
 
-  useEffect(() => {
-    if (ncsMode === 'lounge' || !startedAt) return;
-    const expected = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
-    setElapsedSec(expected);
-    iframeRef.current?.contentWindow?.postMessage(
-      JSON.stringify({ event: 'command', func: 'seekTo', args: [expected, true] }),
-      '*'
-    );
-  }, [startedAt, ncsMode]);
-
-  useEffect(() => {
-    if (ncsMode === 'lounge') return;
-    iframeRef.current?.contentWindow?.postMessage(
-      JSON.stringify({ event: 'command', func: musicOn ? 'playVideo' : 'pauseVideo', args: [] }),
-      '*'
-    );
-  }, [musicOn, ncsMode]);
-
-  useEffect(() => {
-    if (ncsMode === 'lounge' || !startedAt) return;
-    const expected = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
-    setElapsedSec(expected);
-    iframeRef.current?.contentWindow?.postMessage(
-      JSON.stringify({ event: 'command', func: 'seekTo', args: [expected, true] }),
-      '*'
-    );
-  }, [startedAt, ncsMode]);
-
+  // Listen to YouTube player state, duration, and drift-correct currentTime
   useEffect(() => {
     const onMessage = (e: MessageEvent) => {
       if (typeof e.data !== 'string' || !e.data.startsWith('{')) return;
@@ -153,7 +152,15 @@ export function MusicSidebar({
         }
         const ytTime = data?.info?.currentTime;
         if (typeof ytTime === 'number' && seekDraft === null) {
-          setElapsedSec(Math.floor(ytTime));
+          const expected = getExpectedSeconds();
+          // If client drifted > 2.5s from server wall-clock (e.g. slow load), snap back in sync
+          if (musicOn && Math.abs(ytTime - expected) > 2.5 && Date.now() - lastDriftFixRef.current > 4000) {
+            lastDriftFixRef.current = Date.now();
+            seekIframeTo(expected);
+            setElapsedSec(expected);
+          } else {
+            setElapsedSec(Math.floor(ytTime));
+          }
         }
       } catch {
         // Ignore non-JSON messages
@@ -161,36 +168,9 @@ export function MusicSidebar({
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [startedAt, seekDraft, onSeek]);
+  }, [startedAt, clockOffset, seekDraft, musicOn, currentTrack?.id, currentIndex, playlist.length]);
 
-  useEffect(() => {
-    if (ncsMode === 'lounge' || !startedAt) return;
-    const expected = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
-    setElapsedSec(expected);
-    iframeRef.current?.contentWindow?.postMessage(
-      JSON.stringify({ event: 'command', func: 'seekTo', args: [expected, true] }),
-      '*'
-    );
-  }, [startedAt, ncsMode]);
-
-  useEffect(() => {
-    if (ncsMode === 'lounge') return;
-    iframeRef.current?.contentWindow?.postMessage(
-      JSON.stringify({ event: 'command', func: musicOn ? 'playVideo' : 'pauseVideo', args: [] }),
-      '*'
-    );
-  }, [musicOn, ncsMode]);
-
-  useEffect(() => {
-    if (ncsMode === 'lounge' || !startedAt) return;
-    const expected = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
-    setElapsedSec(expected);
-    iframeRef.current?.contentWindow?.postMessage(
-      JSON.stringify({ event: 'command', func: 'seekTo', args: [expected, true] }),
-      '*'
-    );
-  }, [startedAt, ncsMode]);
-
+  // Persist volume
   useEffect(() => {
     localStorage.setItem('pokernight_volume', String(volume));
     iframeRef.current?.contentWindow?.postMessage(
@@ -199,54 +179,7 @@ export function MusicSidebar({
     );
   }, [volume]);
 
-  useEffect(() => {
-    if (ncsMode === 'lounge' || !startedAt) return;
-    const expected = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
-    setElapsedSec(expected);
-    iframeRef.current?.contentWindow?.postMessage(
-      JSON.stringify({ event: 'command', func: 'seekTo', args: [expected, true] }),
-      '*'
-    );
-  }, [startedAt, ncsMode]);
-
-  useEffect(() => {
-    if (ncsMode === 'lounge') return;
-    iframeRef.current?.contentWindow?.postMessage(
-      JSON.stringify({ event: 'command', func: musicOn ? 'playVideo' : 'pauseVideo', args: [] }),
-      '*'
-    );
-  }, [musicOn, ncsMode]);
-
-  // elapsedSec is driven directly by YouTube infoDelivery currentTime
-
-  useEffect(() => {
-    if (ncsMode === 'lounge' || !startedAt) return;
-    const expected = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
-    setElapsedSec(expected);
-    iframeRef.current?.contentWindow?.postMessage(
-      JSON.stringify({ event: 'command', func: 'seekTo', args: [expected, true] }),
-      '*'
-    );
-  }, [startedAt, ncsMode]);
-
-  useEffect(() => {
-    if (ncsMode === 'lounge') return;
-    iframeRef.current?.contentWindow?.postMessage(
-      JSON.stringify({ event: 'command', func: musicOn ? 'playVideo' : 'pauseVideo', args: [] }),
-      '*'
-    );
-  }, [musicOn, ncsMode]);
-
-  useEffect(() => {
-    if (ncsMode === 'lounge' || !startedAt) return;
-    const expected = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
-    setElapsedSec(expected);
-    iframeRef.current?.contentWindow?.postMessage(
-      JSON.stringify({ event: 'command', func: 'seekTo', args: [expected, true] }),
-      '*'
-    );
-  }, [startedAt, ncsMode]);
-
+  // Live YouTube search
   useEffect(() => {
     const q = newTitle.trim();
     if (q.length < 2) {
@@ -272,7 +205,7 @@ export function MusicSidebar({
 
   const iframeSrc = useMemo(() => {
     if (!currentTrack) return '';
-    const startSec = startedAt ? Math.max(0, Math.floor((Date.now() - startedAt) / 1000)) : 0;
+    const startSec = getExpectedSeconds();
     return `https://www.youtube.com/embed/${currentTrack.youtubeId}?autoplay=1&start=${startSec}&controls=0&modestbranding=1&rel=0&enablejsapi=1`;
   }, [currentTrack?.youtubeId]);
 
@@ -300,7 +233,7 @@ export function MusicSidebar({
           }
         }
       } catch {
-        // Fallback to single video if playlist fetch fails
+        // Fallback to single video
       }
     }
     const match = raw.match(/(?:v=|youtu\.be\/|embed\/)([A-Za-z0-9_-]{11})/);
@@ -361,13 +294,6 @@ export function MusicSidebar({
             {isFullscreen ? <Minimize2 className="w-3.5 h-3.5" /> : <Maximize2 className="w-3.5 h-3.5" />}
           </button>
           <button
-            onClick={onToggleMusic}
-            title={musicOn ? 'Silenciar' : 'Activar'}
-            className="p-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 cursor-pointer"
-          >
-            {musicOn ? <Volume2 className="w-3.5 h-3.5 text-emerald-400" /> : <VolumeX className="w-3.5 h-3.5" />}
-          </button>
-          <button
             onClick={onClose}
             className="p-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-400 hover:text-white cursor-pointer"
           >
@@ -376,7 +302,13 @@ export function MusicSidebar({
         </div>
       </div>
 
-      <div className={isFullscreen ? 'max-w-3xl w-full mx-auto flex-1 overflow-y-auto p-6 space-y-4' : 'flex-1 overflow-y-auto p-4 space-y-4'}>
+      <div
+        className={
+          isFullscreen
+            ? 'max-w-3xl w-full mx-auto flex-1 overflow-y-auto p-6 space-y-4'
+            : 'flex-1 overflow-y-auto p-4 space-y-4'
+        }
+      >
         {/* Mode selector */}
         <div className="grid grid-cols-2 gap-1.5">
           {[
@@ -397,7 +329,7 @@ export function MusicSidebar({
           ))}
         </div>
 
-        {/* Visible YouTube Player + Synced Seekbar */}
+        {/* Visible YouTube Player + Custom HUD */}
         {ncsMode !== 'lounge' && currentTrack && iframeSrc && (
           <div className="space-y-2">
             <div className="rounded-xl overflow-hidden border border-zinc-800 bg-black aspect-video">
@@ -415,11 +347,14 @@ export function MusicSidebar({
                     JSON.stringify({ event: 'command', func: 'setVolume', args: [volume] }),
                     '*'
                   );
+                  const expected = getExpectedSeconds();
+                  if (expected > 2) seekIframeTo(expected);
                 }}
                 allow="autoplay; encrypted-media"
                 title={currentTrack.title}
               />
             </div>
+
             <div className="rounded-xl bg-zinc-950/90 border border-zinc-800 p-3.5 space-y-3">
               <div>
                 <div className="text-sm font-bold text-white truncate" title={currentTrack.title}>
@@ -428,9 +363,7 @@ export function MusicSidebar({
                     : currentTrack.title}{' '}
                   <span className="text-zinc-500 font-normal">|</span>{' '}
                   <span className="text-zinc-300 font-medium">
-                    {currentTrack.title.includes(' - ')
-                      ? currentTrack.title.split(' - ')[0]
-                      : 'YouTube'}
+                    {currentTrack.title.includes(' - ') ? currentTrack.title.split(' - ')[0] : 'YouTube'}
                   </span>
                 </div>
                 <div className="text-xs text-zinc-400">Poker Night • Sala</div>
@@ -446,16 +379,7 @@ export function MusicSidebar({
                   onMouseUp={() => {
                     if (seekDraft !== null) {
                       setElapsedSec(seekDraft);
-                      iframeRef.current?.contentWindow?.postMessage(
-                        JSON.stringify({ event: 'command', func: 'seekTo', args: [seekDraft, true] }),
-                        '*'
-                      );
-                      if (musicOn) {
-                        iframeRef.current?.contentWindow?.postMessage(
-                          JSON.stringify({ event: 'command', func: 'playVideo', args: [] }),
-                          '*'
-                        );
-                      }
+                      seekIframeTo(seekDraft);
                       onSeek(seekDraft);
                       setSeekDraft(null);
                     }
@@ -463,16 +387,7 @@ export function MusicSidebar({
                   onTouchEnd={() => {
                     if (seekDraft !== null) {
                       setElapsedSec(seekDraft);
-                      iframeRef.current?.contentWindow?.postMessage(
-                        JSON.stringify({ event: 'command', func: 'seekTo', args: [seekDraft, true] }),
-                        '*'
-                      );
-                      if (musicOn) {
-                        iframeRef.current?.contentWindow?.postMessage(
-                          JSON.stringify({ event: 'command', func: 'playVideo', args: [] }),
-                          '*'
-                        );
-                      }
+                      seekIframeTo(seekDraft);
                       onSeek(seekDraft);
                       setSeekDraft(null);
                     }
@@ -481,7 +396,8 @@ export function MusicSidebar({
                 />
                 <div className="flex items-center justify-between text-[11px] font-mono text-zinc-400">
                   <span>
-                    {Math.floor((seekDraft ?? elapsedSec) / 60)}:{String((seekDraft ?? elapsedSec) % 60).padStart(2, '0')}
+                    {Math.floor((seekDraft ?? elapsedSec) / 60)}:
+                    {String((seekDraft ?? elapsedSec) % 60).padStart(2, '0')}
                   </span>
                   <span>
                     {durationSec
@@ -559,10 +475,7 @@ export function MusicSidebar({
                       const next = [...playlist];
                       const [moved] = next.splice(dragIdx, 1);
                       next.splice(idx, 0, moved);
-                      const newCurrent =
-                        currentIndex === dragIdx
-                          ? idx
-                          : currentIndex;
+                      const newCurrent = currentIndex === dragIdx ? idx : currentIndex;
                       onUpdatePlaylist(next, newCurrent);
                     }
                     setDragIdx(null);
@@ -637,14 +550,10 @@ export function MusicSidebar({
             />
             {newTitle.trim().length > 0 && (
               <div className="max-h-36 overflow-y-auto rounded-xl bg-zinc-950 border border-zinc-800 p-1 space-y-0.5">
-                {searching && (
-                  <div className="text-[11px] text-zinc-400 px-2 py-1">Buscando en YouTube...</div>
-                )}
+                {searching && <div className="text-[11px] text-zinc-400 px-2 py-1">Buscando en YouTube...</div>}
                 {(remoteResults.length > 0
                   ? remoteResults
-                  : NCS_CATALOG.filter((t) =>
-                      t.title.toLowerCase().includes(newTitle.trim().toLowerCase())
-                    )
+                  : NCS_CATALOG.filter((t) => t.title.toLowerCase().includes(newTitle.trim().toLowerCase()))
                 ).map((item) => (
                   <button
                     key={item.youtubeId}
@@ -664,9 +573,8 @@ export function MusicSidebar({
                 ))}
                 {!searching &&
                   remoteResults.length === 0 &&
-                  NCS_CATALOG.filter((t) =>
-                    t.title.toLowerCase().includes(newTitle.trim().toLowerCase())
-                  ).length === 0 && (
+                  NCS_CATALOG.filter((t) => t.title.toLowerCase().includes(newTitle.trim().toLowerCase())).length ===
+                    0 && (
                     <div className="text-[11px] text-zinc-500 px-2 py-1">
                       Sin resultados. Pega un link de YouTube abajo.
                     </div>
@@ -718,6 +626,7 @@ export function MusicSidebar({
           </div>
         )}
       </div>
+
       {toastTitle && (
         <div className="fixed bottom-4 right-4 z-50 px-4 py-2.5 rounded-xl bg-zinc-900/95 border border-emerald-500/40 shadow-2xl text-xs text-white flex items-center gap-2">
           <Music className="w-3.5 h-3.5 text-emerald-400 shrink-0" />

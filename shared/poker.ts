@@ -97,5 +97,5 @@ export type ClientMessage =
   | { type: 'ping' };
 
 export type ServerMessage =
-  | { type: 'state'; state: GameState; yourId: string }
+  | { type: 'state'; state: GameState; yourId: string; serverNow?: number }
   | { type: 'error'; message: string };

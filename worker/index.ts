@@ -47,6 +47,7 @@ export class PokerRoomDO implements DurableObject {
 
   constructor(ctx: DurableObjectState) {
     this.ctx = ctx;
+    this.ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'));
     this.state = {
       roomId: 'mesa-vip',
       ownerId: undefined,
@@ -91,76 +92,83 @@ export class PokerRoomDO implements DurableObject {
 
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
-    server.accept();
-
     const playerId = `p-${Math.random().toString(36).slice(2, 10)}`;
-
-    server.addEventListener('message', (event) => {
-      try {
-        const msg = JSON.parse(String(event.data)) as ClientMessage;
-        if (msg.type === 'join_room') {
-          this.state.roomId = msg.roomId || 'mesa-vip';
-          if (this.state.handNumber === 0 && this.state.players.length === 0) {
-            if (msg.smallBlind && msg.smallBlind > 0) this.state.smallBlind = msg.smallBlind;
-            if (msg.bigBlind && msg.bigBlind > 0) {
-              this.state.bigBlind = msg.bigBlind;
-              this.state.minRaise = msg.bigBlind;
-            }
-            if (msg.startingChips && msg.startingChips >= 100) this.startingChips = msg.startingChips;
-            if (msg.turnTimeSeconds && msg.turnTimeSeconds >= 5) this.state.turnTimeSeconds = msg.turnTimeSeconds;
-          }
-          this.addPlayer(playerId, msg.playerName, server, msg.withBots, msg.spectate);
-        } else if (msg.type === 'start_hand') {
-          if (playerId === this.state.ownerId) this.startHand();
-        } else if (msg.type === 'add_bot') {
-          if (playerId === this.state.ownerId) this.addBot();
-        } else if (msg.type === 'action') {
-          if (playerId === this.state.ownerId) this.resetOwnerInactivity();
-          this.handleAction(playerId, msg.action, msg.amount);
-        } else if (msg.type === 'show_cards') {
-          this.showPlayerCards(playerId);
-        } else if (msg.type === 'set_music') {
-          this.state.music = { ...this.state.music, mode: msg.mode, startedAt: Date.now() };
-          this.broadcastState();
-        } else if (msg.type === 'kick_player') {
-          this.kickPlayer(playerId, msg.targetId);
-        } else if (msg.type === 'join_seat') {
-          this.joinSeat(playerId);
-        } else if (msg.type === 'ping') {
-          // Keep-alive heartbeat
-        } else if (msg.type === 'update_playlist') {
-          this.state.music = {
-            ...this.state.music,
-            mode: 'ncs-gaming',
-            playlist: msg.playlist,
-            currentIndex: Math.max(0, Math.min(msg.currentIndex, msg.playlist.length - 1)),
-            startedAt: Date.now(),
-          };
-          void this.ctx.storage.put('playlist', msg.playlist);
-          this.broadcastState();
-        } else if (msg.type === 'seek_music') {
-          this.state.music = {
-            ...this.state.music,
-            startedAt: Date.now() - Math.max(0, msg.seconds) * 1000,
-          };
-          this.broadcastState();
-        } else if (msg.type === 'kick_player') {
-          this.kickPlayer(playerId, msg.targetId);
-        } else if (msg.type === 'join_seat') {
-          this.joinSeat(playerId);
-        } else if (msg.type === 'ping') {
-          // Keep-alive heartbeat
-        }
-      } catch {
-        // Ignore malformed payloads
-      }
-    });
-
-    server.addEventListener('close', () => {
-      this.removePlayer(playerId);
-    });
+    server.serializeAttachment(playerId);
+    this.ctx.acceptWebSocket(server);
 
     return new Response(null, { status: 101, webSocket: client });
+  }
+
+  async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    const raw = typeof message === 'string' ? message : new TextDecoder().decode(message);
+    if (raw === 'ping') {
+      ws.send('pong');
+      return;
+    }
+    const playerId = ws.deserializeAttachment() as string;
+    if (!playerId) return;
+    try {
+      const msg = JSON.parse(raw) as ClientMessage;
+      if (msg.type === 'join_room') {
+        this.state.roomId = msg.roomId || 'mesa-vip';
+        if (this.state.handNumber === 0 && this.state.players.length === 0) {
+          if (msg.smallBlind && msg.smallBlind > 0) this.state.smallBlind = msg.smallBlind;
+          if (msg.bigBlind && msg.bigBlind > 0) {
+            this.state.bigBlind = msg.bigBlind;
+            this.state.minRaise = msg.bigBlind;
+          }
+          if (msg.startingChips && msg.startingChips >= 100) this.startingChips = msg.startingChips;
+          if (msg.turnTimeSeconds && msg.turnTimeSeconds >= 5) this.state.turnTimeSeconds = msg.turnTimeSeconds;
+        }
+        this.addPlayer(playerId, msg.playerName, ws, msg.withBots, msg.spectate);
+      } else if (msg.type === 'start_hand') {
+        if (playerId === this.state.ownerId) this.startHand();
+      } else if (msg.type === 'add_bot') {
+        if (playerId === this.state.ownerId) this.addBot();
+      } else if (msg.type === 'action') {
+        if (playerId === this.state.ownerId) this.resetOwnerInactivity();
+        this.handleAction(playerId, msg.action, msg.amount);
+      } else if (msg.type === 'show_cards') {
+        this.showPlayerCards(playerId);
+      } else if (msg.type === 'set_music') {
+        this.state.music = { ...this.state.music, mode: msg.mode, startedAt: Date.now() };
+        this.broadcastState();
+      } else if (msg.type === 'update_playlist') {
+        this.state.music = {
+          ...this.state.music,
+          mode: 'ncs-gaming',
+          playlist: msg.playlist,
+          currentIndex: Math.max(0, Math.min(msg.currentIndex, msg.playlist.length - 1)),
+          startedAt: Date.now(),
+        };
+        void this.ctx.storage.put('playlist', msg.playlist);
+        this.broadcastState();
+      } else if (msg.type === 'seek_music') {
+        this.state.music = {
+          ...this.state.music,
+          startedAt: Date.now() - Math.max(0, msg.seconds) * 1000,
+        };
+        this.broadcastState();
+      } else if (msg.type === 'kick_player') {
+        this.kickPlayer(playerId, msg.targetId);
+      } else if (msg.type === 'join_seat') {
+        this.joinSeat(playerId);
+      } else if (msg.type === 'ping') {
+        ws.send('pong');
+      }
+    } catch {
+      // Ignore malformed payloads
+    }
+  }
+
+  async webSocketClose(ws: WebSocket): Promise<void> {
+    const playerId = ws.deserializeAttachment() as string;
+    if (playerId) this.removePlayer(playerId);
+  }
+
+  async webSocketError(ws: WebSocket): Promise<void> {
+    const playerId = ws.deserializeAttachment() as string;
+    if (playerId) this.removePlayer(playerId);
   }
 
   private addPlayer(id: string, name: string, ws: WebSocket, withBots = false, spectate = false): void {
@@ -514,8 +522,10 @@ export class PokerRoomDO implements DurableObject {
 
   private broadcastState(): void {
     const isShowdown = this.state.phase === 'showdown';
-    for (const [playerId, ws] of this.sockets.entries()) {
+    const now = Date.now();
+    for (const ws of this.ctx.getWebSockets()) {
       if (ws.readyState !== 1) continue;
+      const playerId = ws.deserializeAttachment() as string;
       const sanitized: GameState = {
         ...this.state,
         players: this.state.players.map((p) => ({
@@ -526,7 +536,7 @@ export class PokerRoomDO implements DurableObject {
               : p.holeCards.map(() => ({ suit: 'spades', rank: '2' })),
         })),
       };
-      ws.send(JSON.stringify({ type: 'state', state: sanitized, yourId: playerId } satisfies ServerMessage));
+      ws.send(JSON.stringify({ type: 'state', state: sanitized, yourId: playerId, serverNow: now } satisfies ServerMessage));
     }
   }
 }

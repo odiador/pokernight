@@ -20,8 +20,13 @@ wss.on('connection', (ws) => {
   let currentRoom: PokerRoom | null = null;
 
   ws.on('message', (raw) => {
+    const text = raw.toString();
+    if (text === 'ping') {
+      ws.send('pong');
+      return;
+    }
     try {
-      const msg = JSON.parse(raw.toString()) as ClientMessage;
+      const msg = JSON.parse(text) as ClientMessage;
       if (msg.type === 'join_room') {
         currentRoom = getOrCreateRoom(msg.roomId || 'mesa-vip');
         currentRoom.configure({

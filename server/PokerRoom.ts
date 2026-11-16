@@ -6,6 +6,7 @@ import type {
   Phase,
   PlayerAction,
   PlayerState,
+  PlaylistTrack,
   Rank,
   ServerMessage,
   Suit,
@@ -38,11 +39,13 @@ export class PokerRoom {
   private actedThisRound = new Set<string>();
   private botTimer: ReturnType<typeof setTimeout> | null = null;
   private turnTimer: ReturnType<typeof setTimeout> | null = null;
+  private ownerInactivityTimer: ReturnType<typeof setTimeout> | null = null;
   private startingChips = 1000;
 
   constructor(roomId: string) {
     this.state = {
       roomId,
+      ownerId: undefined,
       phase: 'waiting',
       pot: 0,
       communityCards: [],
@@ -51,12 +54,23 @@ export class PokerRoom {
       dealerIndex: 0,
       activePlayerIndex: 0,
       players: [],
+      spectators: [],
       winners: [],
       handNumber: 0,
       smallBlind: 10,
       bigBlind: 20,
       turnTimeSeconds: 20,
-      music: { mode: 'lounge', startedAt: Date.now() },
+      music: {
+        mode: 'lounge',
+        startedAt: Date.now(),
+        currentIndex: 0,
+        playlist: [
+          { id: '1', title: 'NCS - Cartoon, Jéja - On & On', youtubeId: 'K4DyBUG242c' },
+          { id: '2', title: 'NCS - Elektronomia - Sky High', youtubeId: 'TW9d8vYrVFQ' },
+          { id: '3', title: 'NCS - Alan Walker - Fade', youtubeId: 'bM7SZ5SBzyY' },
+          { id: '4', title: 'NCS - Different Heaven - Nekozilla', youtubeId: '6FNHe3kf8_s' },
+        ],
+      },
     };
   }
 
@@ -77,19 +91,42 @@ export class PokerRoom {
     }
   }
 
-  addPlayer(id: string, name: string, ws: WebSocket, withBots = false): void {
+  addPlayer(id: string, name: string, ws: WebSocket, withBots = false, spectate = false): void {
     const existing = this.state.players.find((p) => p.id === id);
     if (existing) {
       this.sockets.set(id, ws);
       this.broadcastState();
       return;
     }
-    if (this.state.players.length >= 6) {
-      this.sendError(ws, 'La mesa está llena (máximo 6 jugadores).');
+    const cleanName = name.trim();
+    if (!cleanName) {
+      this.sendError(ws, 'El nombre es obligatorio.');
+      return;
+    }
+    const nameTaken =
+      this.state.players.some((p) => p.name.toLowerCase() === cleanName.toLowerCase()) ||
+      this.state.spectators.some((s) => s.name.toLowerCase() === cleanName.toLowerCase());
+    if (nameTaken) {
+      this.sendError(ws, 'Ese nombre ya está en uso en esta mesa.');
       return;
     }
 
     this.sockets.set(id, ws);
+    if (!this.state.ownerId) {
+      this.state.ownerId = id;
+      this.resetOwnerInactivity();
+    }
+
+    if (spectate) {
+      this.state.spectators.push({ id, name: cleanName });
+      this.broadcastState();
+      return;
+    }
+
+    if (this.state.players.length >= 6) {
+      this.sendError(ws, 'La mesa está llena (máximo 6 jugadores).');
+      return;
+    }
     this.state.players.push({
       id,
       name: name.trim() || `Jugador ${this.state.players.length + 1}`,
@@ -133,17 +170,77 @@ export class PokerRoom {
 
   removePlayer(id: string): void {
     this.sockets.delete(id);
+    this.state.spectators = this.state.spectators.filter((s) => s.id !== id);
     const idx = this.state.players.findIndex((p) => p.id === id);
-    if (idx === -1) return;
-    this.state.players.splice(idx, 1);
-    this.state.players.forEach((p, i) => {
-      p.seat = i;
-    });
-    if (this.state.players.filter((p) => !p.isBot).length === 0) {
+    if (idx !== -1) {
+      this.state.players.splice(idx, 1);
+      this.state.players.forEach((p, i) => {
+        p.seat = i;
+      });
+    }
+    if (this.state.ownerId === id) {
+      this.transferOwnership();
+    }
+    if (this.state.players.filter((p) => !p.isBot).length === 0 && this.state.spectators.length === 0) {
       if (this.botTimer) clearTimeout(this.botTimer);
+      if (this.turnTimer) clearTimeout(this.turnTimer);
+      if (this.ownerInactivityTimer) clearTimeout(this.ownerInactivityTimer);
     } else {
       this.broadcastState();
     }
+  }
+
+  joinSeat(id: string): void {
+    const specIdx = this.state.spectators.findIndex((s) => s.id === id);
+    if (specIdx === -1) return;
+    if (this.state.players.length >= 6) {
+      const ws = this.sockets.get(id);
+      if (ws) this.sendError(ws, 'La mesa está llena (máximo 6 jugadores).');
+      return;
+    }
+    const [spec] = this.state.spectators.splice(specIdx, 1);
+    this.state.players.push({
+      id: spec.id,
+      name: spec.name,
+      chips: this.startingChips,
+      bet: 0,
+      totalBetThisHand: 0,
+      folded: this.state.phase !== 'waiting',
+      allIn: false,
+      isBot: false,
+      seat: this.state.players.length,
+      holeCards: [],
+    });
+    this.broadcastState();
+  }
+
+  kickPlayer(requesterId: string, targetId: string): void {
+    if (requesterId !== this.state.ownerId || requesterId === targetId) return;
+    const ws = this.sockets.get(targetId);
+    if (ws) {
+      this.sendError(ws, 'Has sido expulsado de la mesa por el anfitrión.');
+      ws.close();
+    }
+    this.removePlayer(targetId);
+  }
+
+  private resetOwnerInactivity(): void {
+    if (this.ownerInactivityTimer) clearTimeout(this.ownerInactivityTimer);
+    if (!this.state.ownerId) return;
+    this.ownerInactivityTimer = setTimeout(() => {
+      this.transferOwnership();
+    }, 15 * 60 * 1000);
+  }
+
+  private transferOwnership(): void {
+    const nextHuman =
+      this.state.players.find((p) => !p.isBot && p.id !== this.state.ownerId) ??
+      this.state.spectators.find((s) => s.id !== this.state.ownerId);
+    this.state.ownerId = nextHuman?.id;
+    if (this.state.ownerId) {
+      this.resetOwnerInactivity();
+    }
+    this.broadcastState();
   }
 
   startHand(): void {
@@ -397,7 +494,26 @@ export class PokerRoom {
   }
 
   setMusic(mode: MusicMode): void {
-    this.state.music = { mode, startedAt: Date.now() };
+    this.state.music = { ...this.state.music, mode, startedAt: Date.now() };
+    this.broadcastState();
+  }
+
+  seekMusic(seconds: number): void {
+    this.state.music = {
+      ...this.state.music,
+      startedAt: Date.now() - Math.max(0, seconds) * 1000,
+    };
+    this.broadcastState();
+  }
+
+  updatePlaylist(playlist: PlaylistTrack[], currentIndex: number): void {
+    this.state.music = {
+      ...this.state.music,
+      mode: 'ncs-gaming',
+      playlist,
+      currentIndex: Math.max(0, Math.min(currentIndex, playlist.length - 1)),
+      startedAt: Date.now(),
+    };
     this.broadcastState();
   }
 

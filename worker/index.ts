@@ -6,6 +6,7 @@ import type {
   Phase,
   PlayerAction,
   PlayerState,
+  PlaylistTrack,
   Rank,
   ServerMessage,
   Suit,
@@ -40,11 +41,13 @@ export class PokerRoomDO implements DurableObject {
   private sockets = new Map<string, WebSocket>();
   private actedThisRound = new Set<string>();
   private turnTimer: ReturnType<typeof setTimeout> | null = null;
+  private ownerInactivityTimer: ReturnType<typeof setTimeout> | null = null;
   private startingChips = 1000;
 
   constructor(_ctx: DurableObjectState) {
     this.state = {
       roomId: 'mesa-vip',
+      ownerId: undefined,
       phase: 'waiting',
       pot: 0,
       communityCards: [],
@@ -53,12 +56,23 @@ export class PokerRoomDO implements DurableObject {
       dealerIndex: 0,
       activePlayerIndex: 0,
       players: [],
+      spectators: [],
       winners: [],
       handNumber: 0,
       smallBlind: 10,
       bigBlind: 20,
       turnTimeSeconds: 20,
-      music: { mode: 'lounge', startedAt: Date.now() },
+      music: {
+        mode: 'lounge',
+        startedAt: Date.now(),
+        currentIndex: 0,
+        playlist: [
+          { id: '1', title: 'NCS - Cartoon, Jéja - On & On', youtubeId: 'K4DyBUG242c' },
+          { id: '2', title: 'NCS - Elektronomia - Sky High', youtubeId: 'TW9d8vYrVFQ' },
+          { id: '3', title: 'NCS - Alan Walker - Fade', youtubeId: 'bM7SZ5SBzyY' },
+          { id: '4', title: 'NCS - Different Heaven - Nekozilla', youtubeId: '6FNHe3kf8_s' },
+        ],
+      },
     };
   }
 
@@ -87,18 +101,42 @@ export class PokerRoomDO implements DurableObject {
             if (msg.startingChips && msg.startingChips >= 100) this.startingChips = msg.startingChips;
             if (msg.turnTimeSeconds && msg.turnTimeSeconds >= 5) this.state.turnTimeSeconds = msg.turnTimeSeconds;
           }
-          this.addPlayer(playerId, msg.playerName, server, msg.withBots);
+          this.addPlayer(playerId, msg.playerName, server, msg.withBots, msg.spectate);
         } else if (msg.type === 'start_hand') {
-          this.startHand();
+          if (playerId === this.state.ownerId) this.startHand();
         } else if (msg.type === 'add_bot') {
-          this.addBot();
+          if (playerId === this.state.ownerId) this.addBot();
         } else if (msg.type === 'action') {
+          if (playerId === this.state.ownerId) this.resetOwnerInactivity();
           this.handleAction(playerId, msg.action, msg.amount);
         } else if (msg.type === 'show_cards') {
           this.showPlayerCards(playerId);
         } else if (msg.type === 'set_music') {
-          this.state.music = { mode: msg.mode, startedAt: Date.now() };
+          this.state.music = { ...this.state.music, mode: msg.mode, startedAt: Date.now() };
           this.broadcastState();
+        } else if (msg.type === 'kick_player') {
+          this.kickPlayer(playerId, msg.targetId);
+        } else if (msg.type === 'join_seat') {
+          this.joinSeat(playerId);
+        } else if (msg.type === 'update_playlist') {
+          this.state.music = {
+            ...this.state.music,
+            mode: 'ncs-gaming',
+            playlist: msg.playlist,
+            currentIndex: Math.max(0, Math.min(msg.currentIndex, msg.playlist.length - 1)),
+            startedAt: Date.now(),
+          };
+          this.broadcastState();
+        } else if (msg.type === 'seek_music') {
+          this.state.music = {
+            ...this.state.music,
+            startedAt: Date.now() - Math.max(0, msg.seconds) * 1000,
+          };
+          this.broadcastState();
+        } else if (msg.type === 'kick_player') {
+          this.kickPlayer(playerId, msg.targetId);
+        } else if (msg.type === 'join_seat') {
+          this.joinSeat(playerId);
         }
       } catch {
         // Ignore malformed payloads
@@ -112,12 +150,33 @@ export class PokerRoomDO implements DurableObject {
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  private addPlayer(id: string, name: string, ws: WebSocket, withBots = false): void {
+  private addPlayer(id: string, name: string, ws: WebSocket, withBots = false, spectate = false): void {
+    const cleanName = name.trim();
+    if (!cleanName) {
+      ws.send(JSON.stringify({ type: 'error', message: 'El nombre es obligatorio.' } satisfies ServerMessage));
+      return;
+    }
+    const nameTaken =
+      this.state.players.some((p) => p.name.toLowerCase() === cleanName.toLowerCase()) ||
+      this.state.spectators.some((s) => s.name.toLowerCase() === cleanName.toLowerCase());
+    if (nameTaken) {
+      ws.send(JSON.stringify({ type: 'error', message: 'Ese nombre ya está en uso en esta mesa.' } satisfies ServerMessage));
+      return;
+    }
+    this.sockets.set(id, ws);
+    if (!this.state.ownerId) {
+      this.state.ownerId = id;
+      this.resetOwnerInactivity();
+    }
+    if (spectate) {
+      this.state.spectators.push({ id, name: cleanName });
+      this.broadcastState();
+      return;
+    }
     if (this.state.players.length >= 6) {
       ws.send(JSON.stringify({ type: 'error', message: 'La mesa está llena (máximo 6 jugadores).' } satisfies ServerMessage));
       return;
     }
-    this.sockets.set(id, ws);
     this.state.players.push({
       id,
       name: name.trim() || `Jugador ${this.state.players.length + 1}`,
@@ -159,10 +218,68 @@ export class PokerRoomDO implements DurableObject {
 
   private removePlayer(id: string): void {
     this.sockets.delete(id);
+    this.state.spectators = this.state.spectators.filter((s) => s.id !== id);
     const idx = this.state.players.findIndex((p) => p.id === id);
-    if (idx === -1) return;
-    this.state.players.splice(idx, 1);
-    this.state.players.forEach((p, i) => { p.seat = i; });
+    if (idx !== -1) {
+      this.state.players.splice(idx, 1);
+      this.state.players.forEach((p, i) => { p.seat = i; });
+    }
+    if (this.state.ownerId === id) {
+      this.transferOwnership();
+    }
+    this.broadcastState();
+  }
+
+  private joinSeat(id: string): void {
+    const specIdx = this.state.spectators.findIndex((s) => s.id === id);
+    if (specIdx === -1) return;
+    if (this.state.players.length >= 6) {
+      const ws = this.sockets.get(id);
+      if (ws) ws.send(JSON.stringify({ type: 'error', message: 'La mesa está llena (máximo 6 jugadores).' } satisfies ServerMessage));
+      return;
+    }
+    const [spec] = this.state.spectators.splice(specIdx, 1);
+    this.state.players.push({
+      id: spec.id,
+      name: spec.name,
+      chips: this.startingChips,
+      bet: 0,
+      totalBetThisHand: 0,
+      folded: this.state.phase !== 'waiting',
+      allIn: false,
+      isBot: false,
+      seat: this.state.players.length,
+      holeCards: [],
+    });
+    this.broadcastState();
+  }
+
+  private kickPlayer(requesterId: string, targetId: string): void {
+    if (requesterId !== this.state.ownerId || requesterId === targetId) return;
+    const ws = this.sockets.get(targetId);
+    if (ws) {
+      ws.send(JSON.stringify({ type: 'error', message: 'Has sido expulsado de la mesa por el anfitrión.' } satisfies ServerMessage));
+      ws.close();
+    }
+    this.removePlayer(targetId);
+  }
+
+  private resetOwnerInactivity(): void {
+    if (this.ownerInactivityTimer) clearTimeout(this.ownerInactivityTimer);
+    if (!this.state.ownerId) return;
+    this.ownerInactivityTimer = setTimeout(() => {
+      this.transferOwnership();
+    }, 15 * 60 * 1000);
+  }
+
+  private transferOwnership(): void {
+    const nextHuman =
+      this.state.players.find((p) => !p.isBot && p.id !== this.state.ownerId) ??
+      this.state.spectators.find((s) => s.id !== this.state.ownerId);
+    this.state.ownerId = nextHuman?.id;
+    if (this.state.ownerId) {
+      this.resetOwnerInactivity();
+    }
     this.broadcastState();
   }
 
@@ -408,6 +525,67 @@ export default {
       const room = url.searchParams.get('room') || 'mesa-vip';
       const id = env.POKER_ROOM.idFromName(room);
       return env.POKER_ROOM.get(id).fetch(request);
+    }
+    if (url.pathname === '/api/yt-search') {
+      const q = url.searchParams.get('q')?.trim();
+      if (!q) return Response.json([]);
+      try {
+        const res = await fetch(`https://www.youtube.com/results?search_query=${encodeURIComponent(q)}`, {
+          headers: { 'User-Agent': 'Mozilla/5.0' },
+        });
+        const html = await res.text();
+        const results: { title: string; youtubeId: string }[] = [];
+        const seen = new Set<string>();
+        const regex = /"videoId":"([A-Za-z0-9_-]{11})".*?"title":\{"runs":\[\{"text":"([^"]+)"\}/g;
+        let m: RegExpExecArray | null;
+        while ((m = regex.exec(html)) !== null && results.length < 8) {
+          if (!seen.has(m[1])) {
+            seen.add(m[1]);
+            results.push({ youtubeId: m[1], title: m[2] });
+          }
+        }
+        return Response.json(results);
+      } catch {
+        return Response.json([]);
+      }
+    }
+    if (url.pathname === '/api/yt-playlist') {
+      const listId = url.searchParams.get('list')?.trim();
+      const videoId = url.searchParams.get('v')?.trim();
+      if (!listId) return Response.json([]);
+      try {
+        const targetUrl =
+          listId.startsWith('RD') && videoId
+            ? `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}&list=${encodeURIComponent(listId)}`
+            : `https://www.youtube.com/playlist?list=${encodeURIComponent(listId)}`;
+        const res = await fetch(targetUrl, {
+          headers: { 'User-Agent': 'Mozilla/5.0' },
+        });
+        const html = await res.text();
+        const results: { title: string; youtubeId: string }[] = [];
+        const seen = new Set<string>();
+        const regex = /"playlistVideoRenderer":\{"videoId":"([A-Za-z0-9_-]{11})".*?"title":\{"runs":\[\{"text":"([^"]+)"\}/g;
+        let m: RegExpExecArray | null;
+        while ((m = regex.exec(html)) !== null && results.length < 30) {
+          if (!seen.has(m[1])) {
+            seen.add(m[1]);
+            results.push({ youtubeId: m[1], title: m[2] });
+          }
+        }
+        if (results.length === 0) {
+          const panelRegex =
+            /"playlistPanelVideoRenderer":\{"title":\{"accessibility":\{"accessibilityData":\{"label":"[^"]+"\}\},"simpleText":"([^"]+)"\}.*?"videoId":"([A-Za-z0-9_-]{11})"/g;
+          while ((m = panelRegex.exec(html)) !== null && results.length < 30) {
+            if (!seen.has(m[2])) {
+              seen.add(m[2]);
+              results.push({ youtubeId: m[2], title: m[1] });
+            }
+          }
+        }
+        return Response.json(results);
+      } catch {
+        return Response.json([]);
+      }
     }
     return env.ASSETS.fetch(request);
   },

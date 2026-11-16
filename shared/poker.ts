@@ -34,13 +34,27 @@ export interface WinnerInfo {
 
 export type MusicMode = 'lounge' | 'ncs-chill' | 'ncs-gaming';
 
+export interface PlaylistTrack {
+  id: string;
+  title: string;
+  youtubeId: string;
+}
+
 export interface MusicState {
   mode: MusicMode;
   startedAt: number;
+  playlist: PlaylistTrack[];
+  currentIndex: number;
+}
+
+export interface SpectatorInfo {
+  id: string;
+  name: string;
 }
 
 export interface GameState {
   roomId: string;
+  ownerId?: string;
   phase: Phase;
   pot: number;
   communityCards: Card[];
@@ -49,6 +63,7 @@ export interface GameState {
   dealerIndex: number;
   activePlayerIndex: number;
   players: PlayerState[];
+  spectators: SpectatorInfo[];
   winners: WinnerInfo[];
   handNumber: number;
   smallBlind: number;
@@ -68,12 +83,17 @@ export type ClientMessage =
       bigBlind?: number;
       startingChips?: number;
       turnTimeSeconds?: number;
+      spectate?: boolean;
     }
   | { type: 'start_hand' }
   | { type: 'action'; action: PlayerAction; amount?: number }
   | { type: 'add_bot' }
   | { type: 'show_cards' }
-  | { type: 'set_music'; mode: MusicMode };
+  | { type: 'set_music'; mode: MusicMode }
+  | { type: 'update_playlist'; playlist: PlaylistTrack[]; currentIndex: number }
+  | { type: 'seek_music'; seconds: number }
+  | { type: 'kick_player'; targetId: string }
+  | { type: 'join_seat' };
 
 export type ServerMessage =
   | { type: 'state'; state: GameState; yourId: string }

@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Bot, Check, Coins, Copy, Crown, Music, Play, Plus, Spade, Users, Volume2, VolumeX } from 'lucide-react';
+import { Bot, Check, Coins, Copy, Crown, Music, Play, Plus, Spade, Users } from 'lucide-react';
 import type { ClientMessage, GameState, MusicMode, PlayerAction, ServerMessage } from '../shared/poker.ts';
 import { evaluateCurrentHand } from '../shared/evaluator.ts';
 import { PlayingCard } from './components/PlayingCard.tsx';
+import { MusicSidebar } from './components/MusicSidebar.tsx';
 import { loungeMusic } from './utils/music.ts';
 
 function generateRoomCode(): string {
@@ -33,7 +34,7 @@ export default function App() {
   const invitedRoom = getRoomFromPath();
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [yourId, setYourId] = useState<string>('');
-  const [playerName, setPlayerName] = useState('Jugador');
+  const [playerName, setPlayerName] = useState(() => localStorage.getItem('pokernight_player_name') ?? '');
   const [roomId] = useState(() => invitedRoom ?? generateRoomCode());
   const [smallBlind, setSmallBlind] = useState(10);
   const [bigBlind, setBigBlind] = useState(20);
@@ -43,13 +44,19 @@ export default function App() {
   const [armedKey, setArmedKey] = useState<string | null>(null);
   const [musicOn, setMusicOn] = useState(false);
   const [ncsMode, setNcsMode] = useState<MusicMode>('lounge');
-  const [showMusicMenu, setShowMusicMenu] = useState(false);
+  const [showMusicMenu, setShowMusicMenu] = useState(() => localStorage.getItem('pokernight_sidebar_open') === 'true');
   const [raiseAmount, setRaiseAmount] = useState(40);
   const [copiedInvite, setCopiedInvite] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
-  const connectAndJoin = (withBots: boolean) => {
+  const connectAndJoin = (withBots: boolean, spectate = false) => {
+    const cleanName = playerName.trim();
+    if (!cleanName) {
+      setError('Ingresa tu nombre para entrar a la mesa.');
+      return;
+    }
+    localStorage.setItem('pokernight_player_name', cleanName);
     setError(null);
     loungeMusic.start();
     setMusicOn(true);
@@ -70,6 +77,7 @@ export default function App() {
         bigBlind,
         startingChips,
         turnTimeSeconds,
+        spectate,
       };
       ws.send(JSON.stringify(msg));
     };
@@ -88,6 +96,10 @@ export default function App() {
 
     ws.onerror = () => {
       setError('No se pudo conectar al servidor WebSocket.');
+    };
+
+    ws.onclose = () => {
+      setGameState(null);
     };
   };
 
@@ -122,6 +134,8 @@ export default function App() {
   };
 
   const me = gameState?.players.find((p) => p.id === yourId);
+  const isOwner = gameState?.ownerId === yourId;
+  const isSpectator = Boolean(gameState?.spectators?.some((s) => s.id === yourId));
   const activePlayer = gameState?.players[gameState.activePlayerIndex];
   const isMyTurn =
     activePlayer?.id === yourId &&
@@ -191,10 +205,11 @@ export default function App() {
             <div>
               <label className="block text-xs font-medium text-zinc-400 mb-1.5">Tu nombre</label>
               <input
+                required
                 value={playerName}
                 onChange={(e) => setPlayerName(e.target.value)}
                 className="w-full rounded-xl bg-zinc-950 border border-zinc-800 px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500"
-                placeholder="Ej. Alex"
+                placeholder="Tu nombre (obligatorio)"
               />
             </div>
             <div className="flex items-center justify-between rounded-xl bg-zinc-950 border border-zinc-800 px-3.5 py-2.5">
@@ -265,20 +280,26 @@ export default function App() {
 
             {error && <p className="text-xs text-rose-400">{error}</p>}
 
-            <div className="grid grid-cols-2 gap-3 pt-2">
+            <div className="grid grid-cols-3 gap-2.5 pt-2">
               <button
-                onClick={() => connectAndJoin(true)}
-                className="flex items-center justify-center gap-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-semibold py-2.5 px-4 text-sm transition cursor-pointer"
+                onClick={() => connectAndJoin(true, false)}
+                className="flex items-center justify-center gap-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-semibold py-2.5 px-3 text-xs sm:text-sm transition cursor-pointer"
               >
                 <Bot className="w-4 h-4" />
-                Jugar vs IA
+                vs IA
               </button>
               <button
-                onClick={() => connectAndJoin(false)}
-                className="flex items-center justify-center gap-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-white font-semibold py-2.5 px-4 text-sm transition cursor-pointer"
+                onClick={() => connectAndJoin(false, false)}
+                className="flex items-center justify-center gap-1.5 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-white font-semibold py-2.5 px-3 text-xs sm:text-sm transition cursor-pointer"
               >
                 <Users className="w-4 h-4" />
                 Mesa Online
+              </button>
+              <button
+                onClick={() => connectAndJoin(false, true)}
+                className="flex items-center justify-center gap-1.5 rounded-xl bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-zinc-300 font-semibold py-2.5 px-3 text-xs sm:text-sm transition cursor-pointer"
+              >
+                Espectear
               </button>
             </div>
           </div>
@@ -305,59 +326,21 @@ export default function App() {
           </span>
         </div>
 
-        <div className="flex items-center gap-2 relative">
+        <div className="flex items-center gap-2">
           <button
-            onClick={() => setShowMusicMenu((v) => !v)}
-            title="Hub de Música (Lounge / NCS)"
+            onClick={() =>
+              setShowMusicMenu((v) => {
+                const next = !v;
+                localStorage.setItem('pokernight_sidebar_open', String(next));
+                return next;
+              })
+            }
+            title="Panel de Sala y Música"
             className="flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 transition cursor-pointer"
           >
             <Music className="w-3.5 h-3.5 text-emerald-400" />
-            <span className="hidden sm:inline">NCS</span>
+            <span className="hidden sm:inline">Música</span>
           </button>
-          <button
-            onClick={() => {
-              if (ncsMode === 'lounge') {
-                setMusicOn(loungeMusic.toggle());
-              } else {
-                setMusicOn((v) => !v);
-              }
-            }}
-            title={musicOn ? 'Silenciar música' : 'Activar música'}
-            className="flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 transition cursor-pointer"
-          >
-            {musicOn ? <Volume2 className="w-3.5 h-3.5 text-emerald-400" /> : <VolumeX className="w-3.5 h-3.5" />}
-          </button>
-          {showMusicMenu && (
-            <div className="absolute right-0 top-10 z-50 w-56 rounded-xl bg-zinc-900 border border-zinc-800 p-2 shadow-2xl space-y-1">
-              {[
-                { id: 'lounge' as const, label: 'Lounge Casino (Integrada)' },
-                { id: 'ncs-chill' as const, label: 'NCS Chill / Lo-Fi' },
-                { id: 'ncs-gaming' as const, label: 'NCS Gaming Mix' },
-              ].map((opt) => (
-                <button
-                  key={opt.id}
-                  onClick={() => {
-                    send({ type: 'set_music', mode: opt.id });
-                    setNcsMode(opt.id);
-                    setShowMusicMenu(false);
-                    if (opt.id === 'lounge') {
-                      loungeMusic.start();
-                    } else {
-                      loungeMusic.stop();
-                    }
-                    setMusicOn(true);
-                  }}
-                  className={`w-full text-left text-xs px-2.5 py-1.5 rounded-lg transition cursor-pointer ${
-                    ncsMode === opt.id
-                      ? 'bg-emerald-500/20 text-emerald-300 font-semibold'
-                      : 'text-zinc-300 hover:bg-zinc-800'
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              ))}
-            </div>
-          )}
           <button
             onClick={() => {
               const url = `${window.location.origin}/invitar/${encodeURIComponent(gameState.roomId)}`;
@@ -370,7 +353,7 @@ export default function App() {
             {copiedInvite ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
             {copiedInvite ? 'Link copiado' : 'Invitar'}
           </button>
-          {gameState.players.length < 6 && (
+          {isOwner && gameState.players.length < 6 && (
             <button
               onClick={() => send({ type: 'add_bot' })}
               className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 transition cursor-pointer"
@@ -379,7 +362,7 @@ export default function App() {
               Añadir Bot
             </button>
           )}
-          {(gameState.phase === 'waiting' || gameState.phase === 'showdown') && (
+          {isOwner && (gameState.phase === 'waiting' || gameState.phase === 'showdown') && (
             <button
               onClick={() => send({ type: 'start_hand' })}
               disabled={gameState.players.length < 2}
@@ -392,10 +375,11 @@ export default function App() {
         </div>
       </header>
 
-      {/* Main Table */}
-      <main className="max-w-5xl w-full mx-auto my-6 flex-1 flex flex-col items-center justify-center gap-6">
-        {/* Felt Table */}
-        <div className="relative w-full rounded-[48px] bg-gradient-to-b from-emerald-900 to-emerald-950 border-[10px] border-zinc-900 shadow-[0_0_80px_rgba(16,185,129,0.12)] p-6 md:p-10 flex flex-col items-center justify-center min-h-[300px]">
+      {/* Main Table + Right Sidebar */}
+      <div className="max-w-7xl w-full mx-auto my-6 flex-1 flex gap-6 items-stretch">
+      <main className="flex-1 flex flex-col items-center justify-center gap-6 min-w-0">
+        {/* Felt Table with ambient bloom */}
+        <div className="relative w-full rounded-[48px] bg-gradient-to-b from-emerald-900 to-emerald-950 border-[10px] border-zinc-900 shadow-[0_0_120px_rgba(16,185,129,0.28),0_0_40px_rgba(52,211,153,0.18),inset_0_0_60px_rgba(16,185,129,0.15)] p-6 md:p-10 flex flex-col items-center justify-center min-h-[300px]">
           {/* Pot */}
           <div className="mb-5 flex items-center gap-2 px-4 py-1.5 rounded-full bg-zinc-950/60 border border-emerald-400/20 text-amber-300 font-semibold text-sm">
             <Coins className="w-4 h-4" />
@@ -466,15 +450,27 @@ export default function App() {
                     : 'bg-zinc-900/80 border-zinc-800'
                 }`}
               >
-                <div className="flex items-center justify-between mb-1">
+                <div className="flex items-center justify-between mb-1 gap-1">
                   <span className="text-xs font-semibold truncate text-white">
+                    {p.id === gameState.ownerId ? '👑 ' : ''}
                     {p.name} {isMe && '(Tú)'}
                   </span>
-                  {idx === gameState.dealerIndex && (
-                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-amber-400 text-zinc-950">
-                      D
-                    </span>
-                  )}
+                  <div className="flex items-center gap-1">
+                    {idx === gameState.dealerIndex && (
+                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-amber-400 text-zinc-950">
+                        D
+                      </span>
+                    )}
+                    {isOwner && !isMe && (
+                      <button
+                        onClick={() => send({ type: 'kick_player', targetId: p.id })}
+                        title="Expulsar de la mesa"
+                        className="text-[10px] px-1.5 py-0.5 rounded bg-rose-500/20 hover:bg-rose-500/40 text-rose-300 cursor-pointer"
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
                 </div>
                 <div className="text-xs text-emerald-400 font-medium mb-2">${p.chips}</div>
 
@@ -510,6 +506,36 @@ export default function App() {
           })}
         </div>
       </main>
+      <MusicSidebar
+        open={showMusicMenu}
+        onClose={() => setShowMusicMenu(false)}
+        gameState={gameState}
+        musicOn={musicOn}
+        ncsMode={ncsMode}
+        isOwner={isOwner}
+        onToggleMusic={() => {
+          if (ncsMode === 'lounge') {
+            setMusicOn(loungeMusic.toggle());
+          } else {
+            setMusicOn((v) => !v);
+          }
+        }}
+        onSelectMode={(mode) => {
+          send({ type: 'set_music', mode });
+          setNcsMode(mode);
+          if (mode === 'lounge') loungeMusic.start();
+          else loungeMusic.stop();
+          setMusicOn(true);
+        }}
+        onUpdatePlaylist={(playlist, currentIndex) => {
+          loungeMusic.stop();
+          setMusicOn(true);
+          send({ type: 'update_playlist', playlist, currentIndex });
+        }}
+        onSeek={(seconds) => send({ type: 'seek_music', seconds })}
+        onKick={(targetId) => send({ type: 'kick_player', targetId })}
+      />
+      </div>
 
       {/* Action Controls */}
       <footer className="max-w-3xl w-full mx-auto">
@@ -609,6 +635,14 @@ export default function App() {
                   ? 'Mano terminada. Pulsa "Siguiente Mano" para continuar.'
                   : `Turno de ${activePlayer?.name ?? '...'}`}
               </span>
+              {isSpectator && (
+                <button
+                  onClick={() => send({ type: 'join_seat' })}
+                  className="px-3.5 py-1.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-zinc-950 font-semibold transition cursor-pointer"
+                >
+                  Unirse a la partida (Join)
+                </button>
+              )}
               {gameState.phase === 'showdown' && me && me.holeCards.length > 0 && !me.showCards && (
                 <button
                   onClick={() => send({ type: 'show_cards' })}
@@ -621,21 +655,6 @@ export default function App() {
           )}
         </div>
       </footer>
-      {/* Hidden NCS YouTube Player synced to room music.startedAt */}
-      {musicOn && ncsMode !== 'lounge' && (
-        <iframe
-          key={`${ncsMode}-${gameState.music?.startedAt ?? 0}`}
-          className="hidden"
-          src={
-            (ncsMode === 'ncs-chill'
-              ? 'https://www.youtube.com/embed/videoseries?list=PLRBp0Fe2GpgnIh0AiYKh7o7HnYAej-5ph&autoplay=1'
-              : 'https://www.youtube.com/embed/videoseries?list=PLRBp0Fe2Gpgm_TfUSA06n63N0h3x22P-r&autoplay=1') +
-            `&start=${Math.max(0, Math.floor((Date.now() - (gameState.music?.startedAt ?? Date.now())) / 1000))}`
-          }
-          allow="autoplay"
-          title="NCS Music"
-        />
-      )}
     </div>
   );
 }

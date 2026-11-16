@@ -30,7 +30,7 @@ wss.on('connection', (ws) => {
           startingChips: msg.startingChips,
           turnTimeSeconds: msg.turnTimeSeconds,
         });
-        currentRoom.addPlayer(playerId, msg.playerName, ws, msg.withBots);
+        currentRoom.addPlayer(playerId, msg.playerName, ws, msg.withBots, msg.spectate);
       } else if (msg.type === 'start_hand' && currentRoom) {
         currentRoom.startHand();
       } else if (msg.type === 'add_bot' && currentRoom) {
@@ -41,6 +41,14 @@ wss.on('connection', (ws) => {
         currentRoom.showPlayerCards(playerId);
       } else if (msg.type === 'set_music' && currentRoom) {
         currentRoom.setMusic(msg.mode);
+      } else if (msg.type === 'update_playlist' && currentRoom) {
+        currentRoom.updatePlaylist(msg.playlist, msg.currentIndex);
+      } else if (msg.type === 'seek_music' && currentRoom) {
+        currentRoom.seekMusic(msg.seconds);
+      } else if (msg.type === 'kick_player' && currentRoom) {
+        currentRoom.kickPlayer(playerId, msg.targetId);
+      } else if (msg.type === 'join_seat' && currentRoom) {
+        currentRoom.joinSeat(playerId);
       }
     } catch {
       // Ignore malformed payloads

@@ -51,7 +51,10 @@ export function MusicSidebar({
   const [elapsedSec, setElapsedSec] = useState(0);
   const [durationSec, setDurationSec] = useState<number | null>(null);
   const [seekDraft, setSeekDraft] = useState<number | null>(null);
-  const [volume, setVolume] = useState(70);
+  const [volume, setVolume] = useState(() => {
+    const saved = Number(localStorage.getItem('pokernight_volume'));
+    return Number.isFinite(saved) && saved >= 0 && saved <= 100 && localStorage.getItem('pokernight_volume') !== null ? saved : 70;
+  });
   const [toastTitle, setToastTitle] = useState<string | null>(null);
   const [isPinned, setIsPinned] = useState(() => localStorage.getItem('pokernight_sidebar_pinned') === 'true');
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -189,6 +192,7 @@ export function MusicSidebar({
   }, [startedAt, ncsMode]);
 
   useEffect(() => {
+    localStorage.setItem('pokernight_volume', String(volume));
     iframeRef.current?.contentWindow?.postMessage(
       JSON.stringify({ event: 'command', func: 'setVolume', args: [volume] }),
       '*'

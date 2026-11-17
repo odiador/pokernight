@@ -96,6 +96,10 @@ export class PokerRoom {
     this.engine.joinSeat(playerId);
   }
 
+  leaveSeat(playerId: string): void {
+    this.engine.leaveSeat(playerId);
+  }
+
   private broadcastState(): void {
     const now = Date.now();
     for (const [playerId, ws] of this.sockets.entries()) {

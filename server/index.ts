@@ -96,6 +96,8 @@ wss.on('connection', (ws) => {
         currentRoom.kickPlayer(playerId, msg.targetId);
       } else if (msg.type === 'join_seat' && currentRoom) {
         currentRoom.joinSeat(playerId);
+      } else if (msg.type === 'leave_seat' && currentRoom) {
+        currentRoom.leaveSeat(playerId);
       } else if (msg.type === 'ping') {
         ws.send('pong');
       }

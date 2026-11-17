@@ -118,6 +118,8 @@ export class PokerRoomDO implements DurableObject {
         this.engine.kickPlayer(playerId, msg.targetId);
       } else if (msg.type === 'join_seat') {
         this.engine.joinSeat(playerId);
+      } else if (msg.type === 'leave_seat') {
+        this.engine.leaveSeat(playerId);
       } else if (msg.type === 'ping') {
         ws.send('pong');
       }

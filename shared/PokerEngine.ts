@@ -9,7 +9,7 @@ import type {
   Rank,
   Suit,
 } from './poker.ts';
-import { evaluateBestHand, evaluateBotHandStrength } from './evaluator.ts';
+import { evaluateBestHand, evaluateBotHandStrength, evaluateCurrentHand } from './evaluator.ts';
 
 const SUITS: Suit[] = ['spades', 'hearts', 'diamonds', 'clubs'];
 const RANKS: Rank[] = ['2', '3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A'];
@@ -40,6 +40,7 @@ export class PokerEngine {
   private actedThisRound = new Set<string>();
   private botTimer: ReturnType<typeof setTimeout> | null = null;
   private turnTimer: ReturnType<typeof setTimeout> | null = null;
+  private phaseTimer: ReturnType<typeof setTimeout> | null = null;
   private autoNextTimer: ReturnType<typeof setTimeout> | null = null;
   private ownerInactivityTimer: ReturnType<typeof setTimeout> | null = null;
   private disconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -119,6 +120,12 @@ export class PokerEngine {
         this.disconnectTimers.delete(id);
       }
       existing.disconnected = false;
+      this.callbacks.onBroadcast();
+      return;
+    }
+
+    const existingSpectator = this.state.spectators.find((s) => s.id === id);
+    if (existingSpectator) {
       this.callbacks.onBroadcast();
       return;
     }
@@ -256,12 +263,14 @@ export class PokerEngine {
         if (freshIdx < this.state.dealerIndex) {
           this.state.dealerIndex = Math.max(0, this.state.dealerIndex - 1);
         }
-        if (freshIdx < this.state.activePlayerIndex) {
+        if (this.state.activePlayerIndex >= 0 && freshIdx < this.state.activePlayerIndex) {
           this.state.activePlayerIndex = Math.max(0, this.state.activePlayerIndex - 1);
         }
         const len = Math.max(1, this.state.players.length);
         this.state.dealerIndex %= len;
-        this.state.activePlayerIndex %= len;
+        if (this.state.activePlayerIndex >= 0) {
+          this.state.activePlayerIndex %= len;
+        }
 
         if (this.state.phase !== 'waiting' && this.state.phase !== 'showdown') {
           const inHand = this.state.players.filter((p) => !p.folded);
@@ -309,6 +318,121 @@ export class PokerEngine {
     this.scheduleAutoStartIfReady(1200);
   }
 
+  leaveSeat(id: string): void {
+    const idx = this.state.players.findIndex((p) => p.id === id);
+    if (idx === -1) return;
+
+    const timer = this.disconnectTimers.get(id);
+    if (timer) {
+      clearTimeout(timer);
+      this.disconnectTimers.delete(id);
+    }
+
+    const player = this.state.players[idx];
+    if (!this.state.spectators.some((s) => s.id === id)) {
+      this.state.spectators.push({ id: player.id, name: player.name });
+    }
+
+    const inActiveHand = this.state.phase !== 'waiting' && this.state.phase !== 'showdown';
+    const wasActive = inActiveHand && this.state.activePlayerIndex === idx;
+    if (wasActive) {
+      if (this.turnTimer) {
+        clearTimeout(this.turnTimer);
+        this.turnTimer = null;
+      }
+      if (this.botTimer) {
+        clearTimeout(this.botTimer);
+        this.botTimer = null;
+      }
+      this.state.turnDeadline = undefined;
+    }
+
+    this.state.players.splice(idx, 1);
+    this.state.players.forEach((p, i) => {
+      p.seat = i;
+    });
+
+    if (this.state.players.length === 0) {
+      this.clearRoundTimers();
+      if (this.autoNextTimer) {
+        clearTimeout(this.autoNextTimer);
+        this.autoNextTimer = null;
+      }
+      this.state.phase = 'waiting';
+      this.state.pot = 0;
+      this.state.communityCards = [];
+      this.state.winners = [];
+      this.state.currentBet = 0;
+      this.state.minRaise = this.state.bigBlind;
+      this.state.dealerIndex = 0;
+      this.state.activePlayerIndex = 0;
+      this.state.turnDeadline = undefined;
+      this.callbacks.onBroadcast();
+      return;
+    }
+
+    if (idx < this.state.dealerIndex) {
+      this.state.dealerIndex = Math.max(0, this.state.dealerIndex - 1);
+    }
+    this.state.dealerIndex %= this.state.players.length;
+
+    if (this.state.activePlayerIndex >= 0) {
+      if (idx < this.state.activePlayerIndex) {
+        this.state.activePlayerIndex = Math.max(0, this.state.activePlayerIndex - 1);
+      }
+      this.state.activePlayerIndex %= this.state.players.length;
+    }
+
+    if (this.state.players.length < 2 && this.autoNextTimer) {
+      clearTimeout(this.autoNextTimer);
+      this.autoNextTimer = null;
+    }
+
+    if (inActiveHand) {
+      const inHand = this.state.players.filter((p) => !p.folded);
+      if (inHand.length === 1) {
+        this.resolveWinnerByFold(inHand[0]);
+        return;
+      }
+      if (inHand.length === 0) {
+        this.clearRoundTimers();
+        this.state.phase = 'waiting';
+        this.state.pot = 0;
+        this.state.communityCards = [];
+        this.state.winners = [];
+        this.state.turnDeadline = undefined;
+        this.callbacks.onBroadcast();
+        return;
+      }
+
+      if (!this.phaseTimer) {
+        const canAct = inHand.filter((p) => !p.allIn);
+        const allMatched = canAct.every((p) => p.bet === this.state.currentBet && this.actedThisRound.has(p.id));
+        if (allMatched || (canAct.length <= 1 && canAct.every((p) => p.bet === this.state.currentBet))) {
+          this.schedulePhaseAdvance();
+          return;
+        }
+        if (wasActive) {
+          let next = idx % this.state.players.length;
+          let guard = 0;
+          while (
+            (this.state.players[next].folded || this.state.players[next].allIn) &&
+            guard < this.state.players.length
+          ) {
+            next = (next + 1) % this.state.players.length;
+            guard++;
+          }
+          this.state.activePlayerIndex = next;
+          this.callbacks.onBroadcast();
+          this.scheduleBotIfNeeded();
+          return;
+        }
+      }
+    }
+
+    this.callbacks.onBroadcast();
+  }
+
   kickPlayer(requesterId: string, targetId: string): void {
     if (requesterId !== this.state.ownerId || requesterId === targetId) return;
     this.callbacks.onSendError(targetId, 'Has sido expulsado de la mesa por el anfitrión.');
@@ -317,9 +441,11 @@ export class PokerEngine {
   }
 
   startHand(): void {
-    if (this.botTimer) clearTimeout(this.botTimer);
-    if (this.autoNextTimer) clearTimeout(this.autoNextTimer);
-    if (this.turnTimer) clearTimeout(this.turnTimer);
+    this.clearRoundTimers();
+    if (this.autoNextTimer) {
+      clearTimeout(this.autoNextTimer);
+      this.autoNextTimer = null;
+    }
 
     for (const p of this.state.players) {
       if (p.chips <= 0) p.chips = this.startingChips;
@@ -380,7 +506,8 @@ export class PokerEngine {
   }
 
   handleAction(playerId: string, action: PlayerAction, raiseAmount?: number): void {
-    if (this.state.phase === 'waiting' || this.state.phase === 'showdown') return;
+    if (this.state.phase === 'waiting' || this.state.phase === 'showdown' || this.phaseTimer) return;
+    if (this.state.activePlayerIndex < 0) return;
     const active = this.state.players[this.state.activePlayerIndex];
     if (!active || active.id !== playerId) return;
 
@@ -432,12 +559,16 @@ export class PokerEngine {
   }
 
   showPlayerCards(playerId: string): void {
-    if (this.state.phase !== 'showdown') return;
+    if (this.state.phase === 'waiting') return;
     const player = this.state.players.find((p) => p.id === playerId);
     if (!player || player.holeCards.length === 0) return;
+    if (this.state.phase !== 'showdown' && !player.folded) return;
     player.showCards = true;
+    player.handName = evaluateCurrentHand(player.holeCards, this.state.communityCards);
+    const shownHandNumber = this.state.handNumber;
     this.callbacks.onBroadcast();
     setTimeout(() => {
+      if (this.state.handNumber !== shownHandNumber) return;
       player.showCards = false;
       this.callbacks.onBroadcast();
     }, 5000);
@@ -501,13 +632,16 @@ export class PokerEngine {
     const isShowdown = this.state.phase === 'showdown';
     return {
       ...this.state,
-      players: this.state.players.map((p) => ({
-        ...p,
-        holeCards:
-          p.id === playerId || (isShowdown && (!p.folded || p.showCards))
+      players: this.state.players.map((p) => {
+        const canSee = p.id === playerId || Boolean(p.showCards) || (isShowdown && !p.folded);
+        return {
+          ...p,
+          handName: canSee ? p.handName : undefined,
+          holeCards: canSee
             ? p.holeCards
             : p.holeCards.map(() => ({ suit: 'spades', rank: '2' })),
-      })),
+        };
+      }),
     };
   }
 
@@ -531,6 +665,32 @@ export class PokerEngine {
     if (p.chips === 0) p.allIn = true;
   }
 
+  private clearRoundTimers(): void {
+    if (this.botTimer) {
+      clearTimeout(this.botTimer);
+      this.botTimer = null;
+    }
+    if (this.turnTimer) {
+      clearTimeout(this.turnTimer);
+      this.turnTimer = null;
+    }
+    if (this.phaseTimer) {
+      clearTimeout(this.phaseTimer);
+      this.phaseTimer = null;
+    }
+  }
+
+  private schedulePhaseAdvance(delayMs = 950): void {
+    this.clearRoundTimers();
+    this.state.turnDeadline = undefined;
+    this.state.activePlayerIndex = -1;
+    this.callbacks.onBroadcast();
+    this.phaseTimer = setTimeout(() => {
+      this.phaseTimer = null;
+      this.advancePhase();
+    }, delayMs);
+  }
+
   private advanceTurn(): void {
     const inHand = this.state.players.filter((p) => !p.folded);
     if (inHand.length === 1) {
@@ -541,8 +701,8 @@ export class PokerEngine {
     const canAct = inHand.filter((p) => !p.allIn);
     const allMatched = canAct.every((p) => p.bet === this.state.currentBet && this.actedThisRound.has(p.id));
 
-    if (allMatched || canAct.length <= 1) {
-      this.advancePhase();
+    if (allMatched || (canAct.length <= 1 && canAct.every((p) => p.bet === this.state.currentBet))) {
+      this.schedulePhaseAdvance(950);
       return;
     }
 
@@ -579,11 +739,15 @@ export class PokerEngine {
       return;
     }
 
+    for (const p of this.state.players) {
+      if (p.showCards && p.holeCards.length > 0) {
+        p.handName = evaluateCurrentHand(p.holeCards, this.state.communityCards);
+      }
+    }
+
     const canAct = this.state.players.filter((p) => !p.folded && !p.allIn);
     if (canAct.length <= 1) {
-      this.state.turnDeadline = undefined;
-      this.callbacks.onBroadcast();
-      setTimeout(() => this.advancePhase(), 800);
+      this.schedulePhaseAdvance(1400);
       return;
     }
 
@@ -593,10 +757,12 @@ export class PokerEngine {
   }
 
   private resolveWinnerByFold(winner: PlayerState): void {
-    if (this.turnTimer) clearTimeout(this.turnTimer);
-    if (this.botTimer) clearTimeout(this.botTimer);
+    this.clearRoundTimers();
     this.state.turnDeadline = undefined;
     winner.chips += this.state.pot;
+    if (winner.holeCards.length > 0) {
+      winner.handName = evaluateCurrentHand(winner.holeCards, this.state.communityCards);
+    }
     this.state.phase = 'showdown';
     this.state.winners = [
       {
@@ -611,8 +777,7 @@ export class PokerEngine {
   }
 
   private resolveShowdown(): void {
-    if (this.turnTimer) clearTimeout(this.turnTimer);
-    if (this.botTimer) clearTimeout(this.botTimer);
+    this.clearRoundTimers();
     this.state.turnDeadline = undefined;
 
     // 1. Return uncalled bet excess if one player bet strictly more than everyone else
@@ -722,10 +887,17 @@ export class PokerEngine {
   }
 
   private scheduleBotIfNeeded(): void {
-    if (this.botTimer) clearTimeout(this.botTimer);
-    if (this.turnTimer) clearTimeout(this.turnTimer);
+    if (this.botTimer) {
+      clearTimeout(this.botTimer);
+      this.botTimer = null;
+    }
+    if (this.turnTimer) {
+      clearTimeout(this.turnTimer);
+      this.turnTimer = null;
+    }
     this.state.turnDeadline = undefined;
-    if (this.state.phase === 'waiting' || this.state.phase === 'showdown') return;
+    if (this.state.phase === 'waiting' || this.state.phase === 'showdown' || this.phaseTimer) return;
+    if (this.state.activePlayerIndex < 0) return;
     const active = this.state.players[this.state.activePlayerIndex];
     if (!active) return;
 
@@ -734,13 +906,16 @@ export class PokerEngine {
       this.state.turnDeadline = Date.now() + ms;
       this.callbacks.onBroadcast();
       this.turnTimer = setTimeout(() => {
+        this.turnTimer = null;
         const toCall = Math.max(0, this.state.currentBet - active.bet);
         this.handleAction(active.id, toCall === 0 ? 'check' : 'fold');
       }, ms);
       return;
     }
 
+    const botDelayMs = 1700 + Math.floor(Math.random() * 600);
     this.botTimer = setTimeout(() => {
+      this.botTimer = null;
       const toCall = Math.max(0, this.state.currentBet - active.bet);
       const strength = evaluateBotHandStrength(active.holeCards, this.state.communityCards);
       const potOdds = toCall / Math.max(1, this.state.pot + toCall);
@@ -764,7 +939,7 @@ export class PokerEngine {
       } else {
         this.handleAction(active.id, 'fold');
       }
-    }, 850);
+    }, botDelayMs);
   }
 
   private resetOwnerInactivity(): void {
@@ -788,10 +963,15 @@ export class PokerEngine {
   }
 
   private clearAllTimers(): void {
-    if (this.botTimer) clearTimeout(this.botTimer);
-    if (this.turnTimer) clearTimeout(this.turnTimer);
-    if (this.autoNextTimer) clearTimeout(this.autoNextTimer);
-    if (this.ownerInactivityTimer) clearTimeout(this.ownerInactivityTimer);
+    this.clearRoundTimers();
+    if (this.autoNextTimer) {
+      clearTimeout(this.autoNextTimer);
+      this.autoNextTimer = null;
+    }
+    if (this.ownerInactivityTimer) {
+      clearTimeout(this.ownerInactivityTimer);
+      this.ownerInactivityTimer = null;
+    }
     for (const t of this.disconnectTimers.values()) clearTimeout(t);
     this.disconnectTimers.clear();
   }

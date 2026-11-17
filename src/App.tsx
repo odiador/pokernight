@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
-import { Check, Clock, Coins, Copy, Crown, Music, Play, Plus, Spade, X } from 'lucide-react';
+import { Check, Clock, Coins, Copy, Crown, Eye, Music, Play, Plus, Spade, X } from 'lucide-react';
 import type { ClientMessage, GameState, MusicMode, PlayerAction, PlaylistTrack, ServerMessage } from '../shared/poker.ts';
 import { evaluateCurrentHand } from '../shared/evaluator.ts';
 import { PlayingCard } from './components/PlayingCard.tsx';
@@ -274,10 +274,6 @@ export default function App() {
     gameState?.phase !== 'showdown';
   const toCall = me ? Math.max(0, (gameState?.currentBet ?? 0) - me.bet) : 0;
   const minRaiseTarget = (gameState?.currentBet ?? 0) + (gameState?.minRaise ?? 0);
-  const myHandName =
-    gameState && me && me.holeCards.length > 0
-      ? evaluateCurrentHand(me.holeCards, gameState.communityCards)
-      : '';
 
   useEffect(() => {
     if (!isMyTurn) {
@@ -521,6 +517,16 @@ export default function App() {
             <Music className="w-3.5 h-3.5 text-emerald-400" />
             <span className="hidden sm:inline">Música</span>
           </button>
+          {!isSpectator && me && (
+            <button
+              onClick={() => send({ type: 'leave_seat' })}
+              title="Salir del asiento y pasar a modo espectador"
+              className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-zinc-300 transition cursor-pointer"
+            >
+              <Eye className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Espectear</span>
+            </button>
+          )}
           <button
             onClick={() => {
               const url = `${window.location.origin}/invitar/${encodeURIComponent(gameState.roomId)}`;
@@ -658,7 +664,11 @@ export default function App() {
                   gameState.phase !== 'waiting' &&
                   gameState.phase !== 'showdown';
                 const isMe = p.id === yourId;
-                const showCards = isMe || (gameState.phase === 'showdown' && (!p.folded || p.showCards));
+                const showCards = isMe || Boolean(p.showCards) || (gameState.phase === 'showdown' && !p.folded);
+                const playerHandName =
+                  showCards && p.holeCards.length > 0
+                    ? p.handName || evaluateCurrentHand(p.holeCards, gameState.communityCards)
+                    : '';
 
                 const totalTurn = Math.max(1, gameState.turnTimeSeconds);
                 const ratio = isTurn && secondsLeft !== null ? Math.max(0, Math.min(1, secondsLeft / totalTurn)) : 0;
@@ -778,14 +788,14 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* Hand Name (self) or Last Action Badge */}
-                    <div className="mt-1.5 flex items-center gap-1.5 min-h-[20px]">
-                      {isMe && myHandName && (
+                    {/* Hand Name & Last Action Badges */}
+                    <div className="mt-1.5 flex flex-wrap items-center justify-center gap-1.5 min-h-[20px]">
+                      {playerHandName && (
                         <span className="px-2.5 py-0.5 rounded-full bg-zinc-950/90 border border-emerald-500/40 text-emerald-300 text-[10px] font-bold uppercase tracking-wider">
-                          {myHandName}
+                          {playerHandName}
                         </span>
                       )}
-                      {p.lastAction && (!isMe || !myHandName || p.folded) && (
+                      {p.lastAction && (
                         <motion.div
                           key={`${p.id}-${p.lastAction}`}
                           initial={{ opacity: 0, scale: 0.85, y: 3 }}
@@ -957,13 +967,15 @@ export default function App() {
               )}
             </>
           ) : (
-            <div className="w-full flex items-center justify-center gap-3 text-xs text-zinc-400 py-1.5">
+            <div className="w-full flex flex-wrap items-center justify-center gap-3 text-xs text-zinc-400 py-1.5">
               <span>
                 {gameState.phase === 'waiting'
                   ? 'Esperando a que comience la mano...'
                   : gameState.phase === 'showdown'
                   ? 'Mano terminada. Pulsa "Siguiente Mano" para continuar.'
-                  : `Turno de ${activePlayer?.name ?? '...'}`}
+                  : activePlayer
+                  ? `Turno de ${activePlayer.name}`
+                  : 'Repartiendo cartas...'}
               </span>
               {isSpectator && (
                 <button
@@ -973,7 +985,11 @@ export default function App() {
                   Unirse a la partida (Join)
                 </button>
               )}
-              {gameState.phase === 'showdown' && me && me.holeCards.length > 0 && !me.showCards && (
+              {(gameState.phase === 'showdown' || me?.folded) &&
+                gameState.phase !== 'waiting' &&
+                me &&
+                me.holeCards.length > 0 &&
+                !me.showCards && (
                 <button
                   onClick={() => send({ type: 'show_cards' })}
                   className="px-3 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-medium transition cursor-pointer"

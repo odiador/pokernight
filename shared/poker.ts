@@ -102,6 +102,7 @@ export type ClientMessage =
   | { type: 'toggle_music_pause' }
   | { type: 'kick_player'; targetId: string }
   | { type: 'join_seat' }
+  | { type: 'leave_seat' }
   | { type: 'ping' };
 
 export type ServerMessage =

@@ -23,6 +23,7 @@ export interface PlayerState {
   lastAction?: string;
   handName?: string;
   showCards?: boolean;
+  disconnected?: boolean;
 }
 
 export interface WinnerInfo {
@@ -30,6 +31,7 @@ export interface WinnerInfo {
   playerName: string;
   amount: number;
   handName: string;
+  winningCards?: Card[];
 }
 
 export type MusicMode = 'lounge' | 'ncs-chill' | 'ncs-gaming';
@@ -45,6 +47,8 @@ export interface MusicState {
   startedAt: number;
   playlist: PlaylistTrack[];
   currentIndex: number;
+  paused?: boolean;
+  pausedAtSec?: number;
 }
 
 export interface SpectatorInfo {
@@ -86,6 +90,7 @@ export type ClientMessage =
       botCount?: number;
       spectate?: boolean;
       initialPlaylist?: PlaylistTrack[];
+      clientId?: string;
     }
   | { type: 'start_hand' }
   | { type: 'action'; action: PlayerAction; amount?: number }
@@ -94,6 +99,7 @@ export type ClientMessage =
   | { type: 'set_music'; mode: MusicMode }
   | { type: 'update_playlist'; playlist: PlaylistTrack[]; currentIndex: number }
   | { type: 'seek_music'; seconds: number }
+  | { type: 'toggle_music_pause' }
   | { type: 'kick_player'; targetId: string }
   | { type: 'join_seat' }
   | { type: 'ping' };

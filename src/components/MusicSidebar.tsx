@@ -85,6 +85,8 @@ export function MusicSidebar({
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const endedHandledRef = useRef<string | null>(null);
   const lastDriftFixRef = useRef(0);
+  const ignorePlayerStateUntilRef = useRef<number>(0);
+  const lastYtStateRef = useRef<number>(-1);
 
   const playlist = gameState.music?.playlist ?? [];
   const currentIndex = gameState.music?.currentIndex ?? 0;
@@ -101,6 +103,7 @@ export function MusicSidebar({
       : 0;
 
   const seekIframeTo = (sec: number) => {
+    ignorePlayerStateUntilRef.current = Date.now() + 1500;
     iframeRef.current?.contentWindow?.postMessage(
       JSON.stringify({ event: 'command', func: 'seekTo', args: [sec, true] }),
       '*'
@@ -116,6 +119,7 @@ export function MusicSidebar({
   // Sync when server updates startedAt (from any client)
   useEffect(() => {
     if (ncsMode === 'lounge' || !startedAt) return;
+    ignorePlayerStateUntilRef.current = Date.now() + 1500;
     const expected = getExpectedSeconds();
     setElapsedSec(expected);
     seekIframeTo(expected);
@@ -124,6 +128,7 @@ export function MusicSidebar({
   // Play / pause sync (shared room state + local musicOn)
   useEffect(() => {
     if (ncsMode === 'lounge') return;
+    ignorePlayerStateUntilRef.current = Date.now() + 1500;
     iframeRef.current?.contentWindow?.postMessage(
       JSON.stringify({ event: 'command', func: isPlayingActive ? 'playVideo' : 'pauseVideo', args: [] }),
       '*'
@@ -132,6 +137,8 @@ export function MusicSidebar({
 
   // Reset track metadata + show toast on song change
   useEffect(() => {
+    ignorePlayerStateUntilRef.current = Date.now() + 1500;
+    lastYtStateRef.current = -1;
     setDurationSec(null);
     setElapsedSec(0);
     setSeekDraft(null);
@@ -155,6 +162,17 @@ export function MusicSidebar({
           }
           return;
         }
+        const pState = data?.info?.playerState;
+        if (typeof pState === 'number' && pState !== lastYtStateRef.current) {
+          lastYtStateRef.current = pState;
+          if (Date.now() > ignorePlayerStateUntilRef.current) {
+            if (pState === 2 && !roomPaused && musicOn) {
+              onToggleRoomPause();
+            } else if (pState === 1 && roomPaused && musicOn) {
+              onToggleRoomPause();
+            }
+          }
+        }
         const ytDuration = data?.info?.duration;
         if (typeof ytDuration === 'number' && ytDuration > 0) {
           setDurationSec(Math.floor(ytDuration));
@@ -177,7 +195,31 @@ export function MusicSidebar({
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [startedAt, clockOffset, seekDraft, isPlayingActive, currentTrack?.id, currentIndex, playlist.length]);
+  }, [startedAt, clockOffset, seekDraft, isPlayingActive, roomPaused, musicOn, currentTrack?.id, currentIndex, playlist.length]);
+
+  // System hardware multimedia keys (Media Session API)
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return;
+    navigator.mediaSession.setActionHandler('play', () => {
+      if (roomPaused) onToggleRoomPause();
+      else if (!musicOn) onToggleMusic();
+    });
+    navigator.mediaSession.setActionHandler('pause', () => {
+      if (!roomPaused && musicOn) onToggleRoomPause();
+    });
+    navigator.mediaSession.setActionHandler('previoustrack', () => {
+      if (playlist.length > 0) onUpdatePlaylist(playlist, (currentIndex - 1 + playlist.length) % playlist.length);
+    });
+    navigator.mediaSession.setActionHandler('nexttrack', () => {
+      if (playlist.length > 0) onUpdatePlaylist(playlist, (currentIndex + 1) % playlist.length);
+    });
+    return () => {
+      navigator.mediaSession.setActionHandler('play', null);
+      navigator.mediaSession.setActionHandler('pause', null);
+      navigator.mediaSession.setActionHandler('previoustrack', null);
+      navigator.mediaSession.setActionHandler('nexttrack', null);
+    };
+  }, [roomPaused, musicOn, playlist, currentIndex, onToggleRoomPause, onToggleMusic, onUpdatePlaylist]);
 
   // Persist volume (effectiveVolume = 0 when locally muted via musicOn === false)
   useEffect(() => {

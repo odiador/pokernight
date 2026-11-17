@@ -8,6 +8,8 @@ interface PlayingCardProps {
   index?: number;
   isCommunity?: boolean;
   highlighted?: boolean;
+  fanAngle?: number;
+  dealFromTop?: boolean;
 }
 
 const SUIT_SYMBOL: Record<Card['suit'], string> = {
@@ -24,8 +26,10 @@ export function PlayingCard({
   index = 0,
   isCommunity = false,
   highlighted = false,
+  fanAngle = 0,
+  dealFromTop = false,
 }: PlayingCardProps) {
-  const sizeClasses = small ? 'w-11 h-16 text-xs rounded-lg' : 'w-16 h-24 text-base rounded-xl';
+  const sizeClasses = small ? 'w-12 h-[68px] text-xs rounded-lg' : 'w-16 h-24 text-base rounded-xl';
   const isRed = card && (card.suit === 'hearts' || card.suit === 'diamonds');
   const showFace = !hidden && Boolean(card);
 
@@ -33,14 +37,16 @@ export function PlayingCard({
     <motion.div
       initial={{
         opacity: 0,
-        y: isCommunity ? -48 : -28,
-        scale: 0.75,
+        y: dealFromTop || isCommunity ? -70 : -28,
+        scale: 0.7,
+        rotate: 0,
         rotateY: showFace ? 180 : 0,
       }}
       animate={{
         opacity: 1,
         y: highlighted ? -6 : 0,
         scale: 1,
+        rotate: fanAngle,
         rotateY: 0,
       }}
       exit={{ opacity: 0, scale: 0.8, y: 12 }}

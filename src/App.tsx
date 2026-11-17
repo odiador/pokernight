@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { Check, Clock, Coins, Copy, Crown, Music, Play, Plus, Spade } from 'lucide-react';
+import { motion } from 'framer-motion';
+import { Check, Clock, Coins, Copy, Crown, Music, Play, Plus, Spade, X } from 'lucide-react';
 import type { ClientMessage, GameState, MusicMode, PlayerAction, PlaylistTrack, ServerMessage } from '../shared/poker.ts';
 import { evaluateCurrentHand } from '../shared/evaluator.ts';
 import { PlayingCard } from './components/PlayingCard.tsx';
@@ -66,6 +66,7 @@ export default function App() {
   const [showMusicMenu, setShowMusicMenu] = useState(() => localStorage.getItem('pokernight_sidebar_open') === 'true');
   const [clockOffset, setClockOffset] = useState(0);
   const [raiseAmount, setRaiseAmount] = useState(40);
+  const [showRaiseTray, setShowRaiseTray] = useState(false);
   const [copiedInvite, setCopiedInvite] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -281,6 +282,7 @@ export default function App() {
   useEffect(() => {
     if (!isMyTurn) {
       setArmedKey(null);
+      setShowRaiseTray(false);
       return;
     }
     let clearTimer: ReturnType<typeof setTimeout> | null = null;
@@ -554,164 +556,255 @@ export default function App() {
       </header>
 
       {/* Main Table + Right Sidebar */}
-      <div className="max-w-7xl w-full mx-auto my-6 flex-1 flex gap-6 items-stretch">
-      <main className="flex-1 flex flex-col items-center justify-center gap-6 min-w-0">
-        {/* Felt Table with ambient bloom */}
-        <div className="relative w-full rounded-[48px] bg-gradient-to-b from-emerald-900 to-emerald-950 border-[10px] border-zinc-900 shadow-[0_0_120px_rgba(16,185,129,0.28),0_0_40px_rgba(52,211,153,0.18),inset_0_0_60px_rgba(16,185,129,0.15)] p-6 md:p-10 flex flex-col items-center justify-center min-h-[300px]">
-          {/* Pot */}
-          <div className="mb-5 flex items-center gap-2 px-4 py-1.5 rounded-full bg-zinc-950/60 border border-emerald-400/20 text-amber-300 font-semibold text-sm">
-            <Coins className="w-4 h-4" />
-            Bote: ${gameState.pot}
-          </div>
+      <div className="max-w-7xl w-full mx-auto my-4 flex-1 flex gap-6 items-stretch">
+      <main className="flex-1 flex flex-col items-center justify-center gap-10 min-w-0 py-6 px-2 sm:px-6">
+        {/* Oval Felt Table with Perimeter Seats */}
+        {(() => {
+          const players = gameState.players;
+          const myIdx = players.findIndex((p) => p.id === yourId);
+          const anchorIdx = myIdx >= 0 ? myIdx : 0;
+          const seatLayouts: Record<number, string[]> = {
+            1: ['bottom-[-30px] left-1/2 -translate-x-1/2'],
+            2: ['bottom-[-30px] left-1/2 -translate-x-1/2', 'top-[-30px] left-1/2 -translate-x-1/2'],
+            3: [
+              'bottom-[-30px] left-1/2 -translate-x-1/2',
+              'top-[12%] left-[-12px] sm:left-[2%]',
+              'top-[12%] right-[-12px] sm:right-[2%]',
+            ],
+            4: [
+              'bottom-[-30px] left-1/2 -translate-x-1/2',
+              'top-1/2 -translate-y-1/2 left-[-12px] sm:left-[1%]',
+              'top-[-30px] left-1/2 -translate-x-1/2',
+              'top-1/2 -translate-y-1/2 right-[-12px] sm:right-[1%]',
+            ],
+            5: [
+              'bottom-[-30px] left-1/2 -translate-x-1/2',
+              'bottom-[14%] left-[-12px] sm:left-[1%]',
+              'top-[10%] left-[4%]',
+              'top-[10%] right-[4%]',
+              'bottom-[14%] right-[-12px] sm:right-[1%]',
+            ],
+            6: [
+              'bottom-[-30px] left-1/2 -translate-x-1/2',
+              'bottom-[14%] left-[-12px] sm:left-[1%]',
+              'top-[12%] left-[-12px] sm:left-[2%]',
+              'top-[-30px] left-1/2 -translate-x-1/2',
+              'top-[12%] right-[-12px] sm:right-[2%]',
+              'bottom-[14%] right-[-12px] sm:right-[1%]',
+            ],
+          };
+          const positions = seatLayouts[Math.min(6, Math.max(1, players.length))] ?? seatLayouts[6];
+          const winningSet = new Set(
+            gameState.phase === 'showdown'
+              ? gameState.winners.flatMap((w) => (w.winningCards ?? []).map((c) => `${c.rank}-${c.suit}`))
+              : []
+          );
 
-          {/* Community Cards */}
-          {(() => {
-            const winningSet = new Set(
-              gameState.phase === 'showdown'
-                ? gameState.winners.flatMap((w) => (w.winningCards ?? []).map((c) => `${c.rank}-${c.suit}`))
-                : []
-            );
-            return (
-              <div className="flex items-center justify-center gap-2.5 min-h-[96px]">
-                <AnimatePresence>
-                  {gameState.communityCards.map((card, i) => (
+          return (
+            <div className="relative w-full max-w-4xl aspect-[16/10] min-h-[380px] sm:min-h-[430px] rounded-[999px] bg-gradient-to-b from-emerald-900 via-emerald-900 to-emerald-950 border-[12px] border-zinc-900 shadow-[0_0_120px_rgba(16,185,129,0.22),0_0_40px_rgba(52,211,153,0.14),inset_0_0_70px_rgba(6,78,59,0.75)] flex flex-col items-center justify-center px-6 py-10">
+              {/* Subtle Dealer Slot */}
+              <div className="absolute top-4 left-1/2 -translate-x-1/2 w-16 h-2 rounded-full bg-zinc-950/70 border border-emerald-500/20" />
+
+              {/* Pot */}
+              <div className="mb-4 flex items-center gap-2 px-4 py-1.5 rounded-full bg-zinc-950/70 border border-emerald-400/25 text-amber-300 font-semibold text-sm shadow">
+                <Coins className="w-4 h-4" />
+                <span>POT • ${gameState.pot}</span>
+              </div>
+
+              {/* 5 Community Card Slots */}
+              <div className="flex items-center justify-center gap-2 sm:gap-3">
+                {[0, 1, 2, 3, 4].map((slotIdx) => {
+                  const card = gameState.communityCards[slotIdx];
+                  if (!card) {
+                    return (
+                      <div
+                        key={`slot-${slotIdx}`}
+                        className="w-16 h-24 rounded-xl border border-emerald-400/15 bg-emerald-950/35"
+                      />
+                    );
+                  }
+                  return (
                     <PlayingCard
-                      key={`${gameState.handNumber}-${card.rank}-${card.suit}-${i}`}
+                      key={`${gameState.handNumber}-${card.rank}-${card.suit}-${slotIdx}`}
                       card={card}
-                      index={i}
+                      index={slotIdx}
                       isCommunity
                       highlighted={winningSet.has(`${card.rank}-${card.suit}`)}
                     />
-                  ))}
-                </AnimatePresence>
-                {gameState.communityCards.length === 0 && (
-                  <span className="text-xs text-emerald-200/40 tracking-widest uppercase">
-                    Cartas comunitarias
-                  </span>
-                )}
+                  );
+                })}
               </div>
-            );
-          })()}
 
-          {myHandName && (
-            <motion.div
-              key={myHandName}
-              initial={{ opacity: 0, y: 6 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="mt-4 px-3.5 py-1 rounded-full bg-emerald-500/15 border border-emerald-400/30 text-emerald-200 text-xs font-medium"
-            >
-              Tu mano: <strong className="text-white">{myHandName}</strong>
-            </motion.div>
-          )}
-
-          {/* Winners Banner */}
-          {gameState.winners.length > 0 && (
-            <motion.div
-              initial={{ opacity: 0, scale: 0.92 }}
-              animate={{ opacity: 1, scale: 1 }}
-              className="mt-5 px-4 py-2 rounded-xl bg-amber-500/15 border border-amber-400/40 text-amber-200 text-sm flex items-center gap-2"
-            >
-              <Crown className="w-4 h-4 text-amber-400" />
-              {gameState.winners.map((w) => `${w.playerName} gana $${w.amount} (${w.handName})`).join(' • ')}
-            </motion.div>
-          )}
-        </div>
-
-        {/* Players Grid */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-6 gap-3 w-full">
-          {gameState.players.map((p, idx) => {
-            const isTurn =
-              idx === gameState.activePlayerIndex &&
-              gameState.phase !== 'waiting' &&
-              gameState.phase !== 'showdown';
-            const isMe = p.id === yourId;
-            const showCards = isMe || (gameState.phase === 'showdown' && (!p.folded || p.showCards));
-            const winningSet = new Set(
-              gameState.phase === 'showdown'
-                ? gameState.winners.flatMap((w) => (w.winningCards ?? []).map((c) => `${c.rank}-${c.suit}`))
-                : []
-            );
-
-            return (
-              <div
-                key={p.id}
-                className={`rounded-2xl p-3 border transition ${
-                  isTurn
-                    ? 'bg-zinc-900 border-emerald-400 shadow-[0_0_20px_rgba(52,211,153,0.2)]'
-                    : p.folded
-                    ? 'bg-zinc-900/40 border-zinc-800/60 opacity-50'
-                    : 'bg-zinc-900/80 border-zinc-800'
-                }`}
-              >
-                <div className="flex items-center justify-between mb-1 gap-1">
-                  <span className="text-xs font-semibold truncate text-white">
-                    {p.id === gameState.ownerId ? '👑 ' : ''}
-                    {p.name} {isMe && '(Tú)'}
-                    {p.disconnected && <span className="ml-1 text-[10px] text-amber-400">(Desconectado)</span>}
+              {/* Winners Banner */}
+              {gameState.winners.length > 0 && (
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.94 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  className="mt-4 px-4 py-1.5 rounded-xl bg-amber-500/15 border border-amber-400/40 text-amber-200 text-xs sm:text-sm flex items-center gap-2"
+                >
+                  <Crown className="w-4 h-4 text-amber-400 shrink-0" />
+                  <span>
+                    {gameState.winners.map((w) => `${w.playerName} gana $${w.amount} (${w.handName})`).join(' • ')}
                   </span>
-                  <div className="flex items-center gap-1">
-                    {idx === gameState.dealerIndex && (
-                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-amber-400 text-zinc-950">
-                        D
-                      </span>
+                </motion.div>
+              )}
+
+              {/* Perimeter Player Seats */}
+              {players.map((p, idx) => {
+                const relIdx = (idx - anchorIdx + players.length) % players.length;
+                const posClass = positions[relIdx] ?? positions[0];
+                const isTurn =
+                  idx === gameState.activePlayerIndex &&
+                  gameState.phase !== 'waiting' &&
+                  gameState.phase !== 'showdown';
+                const isMe = p.id === yourId;
+                const showCards = isMe || (gameState.phase === 'showdown' && (!p.folded || p.showCards));
+
+                const totalTurn = Math.max(1, gameState.turnTimeSeconds);
+                const ratio = isTurn && secondsLeft !== null ? Math.max(0, Math.min(1, secondsLeft / totalTurn)) : 0;
+                const radius = 17;
+                const circumference = 2 * Math.PI * radius;
+                const strokeDashoffset = circumference * (1 - ratio);
+                const ringColor =
+                  secondsLeft !== null && secondsLeft <= 10
+                    ? '#fb7185'
+                    : secondsLeft !== null && secondsLeft <= 15
+                    ? '#fbbf24'
+                    : '#34d399';
+
+                return (
+                  <div
+                    key={p.id}
+                    className={`absolute z-20 flex flex-col items-center transition-all ${posClass} ${
+                      p.folded ? 'opacity-50' : ''
+                    }`}
+                  >
+                    {/* Fanned Hole Cards above seat pill */}
+                    {p.holeCards.length > 0 && (
+                      <div className="flex items-end justify-center -mb-2.5 z-10">
+                        {p.holeCards.map((c, ci) => (
+                          <div key={`${gameState.handNumber}-${p.id}-${ci}`} className={ci === 1 ? '-ml-2' : ''}>
+                            <PlayingCard
+                              card={c}
+                              hidden={!showCards}
+                              small
+                              index={ci}
+                              dealFromTop
+                              fanAngle={ci === 0 ? -7 : 7}
+                              highlighted={showCards && winningSet.has(`${c.rank}-${c.suit}`)}
+                            />
+                          </div>
+                        ))}
+                      </div>
                     )}
-                    {isOwner && !isMe && (
-                      <button
-                        onClick={() => send({ type: 'kick_player', targetId: p.id })}
-                        title="Expulsar de la mesa"
-                        className="text-[10px] px-1.5 py-0.5 rounded bg-rose-500/20 hover:bg-rose-500/40 text-rose-300 cursor-pointer"
-                      >
-                        ✕
-                      </button>
-                    )}
-                  </div>
-                </div>
-                <div className="flex items-center justify-between text-xs text-emerald-400 font-medium mb-2">
-                  <span>${p.chips}</span>
-                  {isTurn && secondsLeft !== null && (
-                    <span
-                      className={`inline-flex items-center gap-1 font-mono font-bold px-1.5 py-0.5 rounded ${
-                        secondsLeft <= 10 ? 'bg-rose-500/25 text-rose-300 animate-pulse' : 'bg-zinc-800 text-zinc-200'
+
+                    {/* Seat Pill with SVG Timer Ring */}
+                    <div
+                      className={`relative z-20 flex items-center gap-2.5 pl-1.5 pr-3 py-1.5 rounded-full bg-zinc-900/95 border shadow-xl backdrop-blur ${
+                        isTurn
+                          ? 'border-emerald-400 shadow-[0_0_24px_rgba(52,211,153,0.3)]'
+                          : 'border-zinc-700/80'
                       }`}
                     >
-                      <Clock className="w-3 h-3" />
-                      {secondsLeft}s
-                    </span>
-                  )}
-                </div>
+                      {/* Radial Timer / Avatar Circle */}
+                      <div className="relative w-10 h-10 shrink-0 flex items-center justify-center rounded-full bg-zinc-950 border border-zinc-800">
+                        {isTurn && secondsLeft !== null ? (
+                          <>
+                            <svg className="w-10 h-10 -rotate-90" viewBox="0 0 42 42">
+                              <circle
+                                cx="21"
+                                cy="21"
+                                r={radius}
+                                fill="none"
+                                stroke="#27272a"
+                                strokeWidth="3"
+                              />
+                              <circle
+                                cx="21"
+                                cy="21"
+                                r={radius}
+                                fill="none"
+                                stroke={ringColor}
+                                strokeWidth="3"
+                                strokeLinecap="round"
+                                strokeDasharray={circumference}
+                                strokeDashoffset={strokeDashoffset}
+                                style={{ transition: 'stroke-dashoffset 0.25s linear, stroke 0.25s ease' }}
+                              />
+                            </svg>
+                            <span
+                              className={`absolute text-[11px] font-mono font-bold ${
+                                secondsLeft <= 10 ? 'text-rose-300 animate-pulse' : 'text-white'
+                              }`}
+                            >
+                              {secondsLeft}
+                            </span>
+                          </>
+                        ) : (
+                          <span className="text-xs font-bold text-zinc-300">
+                            {p.id === gameState.ownerId ? '👑' : p.seat + 1}
+                          </span>
+                        )}
+                      </div>
 
-                <div className="flex items-center gap-1.5 min-h-[64px]">
-                  <AnimatePresence>
-                    {p.holeCards.map((c, ci) => (
-                      <PlayingCard
-                        key={`${gameState.handNumber}-${p.id}-${ci}`}
-                        card={c}
-                        hidden={!showCards}
-                        small
-                        index={ci}
-                        highlighted={showCards && winningSet.has(`${c.rank}-${c.suit}`)}
-                      />
-                    ))}
-                  </AnimatePresence>
-                </div>
+                      {/* Name + Stack */}
+                      <div className="min-w-[78px] max-w-[120px]">
+                        <div className="text-xs font-semibold text-white truncate">
+                          {p.name}
+                          {isMe ? ' (Tú)' : ''}
+                        </div>
+                        <div className="text-[11px] font-medium text-emerald-400 flex items-center gap-1.5">
+                          <span>${p.chips}</span>
+                          {p.disconnected && <span className="text-[9px] text-amber-400">offline</span>}
+                        </div>
+                      </div>
 
-                {p.lastAction && (
-                  <motion.div
-                    key={`${p.id}-${p.lastAction}`}
-                    initial={{ opacity: 0, scale: 0.8, y: 4 }}
-                    animate={{ opacity: 1, scale: 1, y: 0 }}
-                    transition={{ type: 'spring', stiffness: 350, damping: 20 }}
-                    className={`mt-2 inline-flex items-center px-2.5 py-0.5 rounded-full border text-[11px] font-semibold tracking-wide ${getActionBadgeStyle(
-                      p.lastAction
-                    )}`}
-                  >
-                    {p.lastAction}
-                  </motion.div>
-                )}
-              </div>
-            );
-          })}
-        </div>
+                      {/* Dealer / Kick */}
+                      <div className="flex items-center gap-1">
+                        {idx === gameState.dealerIndex && (
+                          <span className="w-5 h-5 rounded-full bg-amber-400 text-zinc-950 text-[10px] font-bold flex items-center justify-center">
+                            D
+                          </span>
+                        )}
+                        {isOwner && !isMe && (
+                          <button
+                            onClick={() => send({ type: 'kick_player', targetId: p.id })}
+                            title="Expulsar de la mesa"
+                            className="w-5 h-5 rounded-full bg-rose-500/20 hover:bg-rose-500/40 text-rose-300 text-[10px] flex items-center justify-center cursor-pointer"
+                          >
+                            ✕
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Hand Name (self) or Last Action Badge */}
+                    <div className="mt-1.5 flex items-center gap-1.5 min-h-[20px]">
+                      {isMe && myHandName && (
+                        <span className="px-2.5 py-0.5 rounded-full bg-zinc-950/90 border border-emerald-500/40 text-emerald-300 text-[10px] font-bold uppercase tracking-wider">
+                          {myHandName}
+                        </span>
+                      )}
+                      {p.lastAction && (!isMe || !myHandName || p.folded) && (
+                        <motion.div
+                          key={`${p.id}-${p.lastAction}`}
+                          initial={{ opacity: 0, scale: 0.85, y: 3 }}
+                          animate={{ opacity: 1, scale: 1, y: 0 }}
+                          transition={{ type: 'spring', stiffness: 320, damping: 22 }}
+                          className={`inline-flex items-center px-2.5 py-0.5 rounded-full border text-[10px] font-semibold tracking-wide ${getActionBadgeStyle(
+                            p.lastAction
+                          )}`}
+                        >
+                          {p.lastAction}
+                        </motion.div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })()}
       </main>
       <MusicSidebar
         open={showMusicMenu}
@@ -741,89 +834,122 @@ export default function App() {
       />
       </div>
 
-      {/* Action Controls */}
-      <footer className="max-w-3xl w-full mx-auto">
-        <div className="rounded-2xl bg-zinc-900/90 border border-zinc-800 p-3 flex flex-wrap items-center justify-between gap-3">
+      {/* Centralized Action Controls */}
+      <footer className="max-w-xl w-full mx-auto pt-4">
+        <div className="rounded-2xl bg-zinc-900/95 border border-zinc-800 p-3 shadow-2xl space-y-2.5">
           {isMyTurn ? (
             <>
-              <div className="flex items-center gap-2">
-                <button
-                  onClick={() => sendAction('fold')}
-                  className="px-4 py-2 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 border border-rose-500/30 text-sm font-semibold transition cursor-pointer"
-                >
-                  Fold
-                </button>
-                {toCall === 0 ? (
-                  <button
-                    onClick={() => sendAction('check')}
-                    className="px-4 py-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-white text-sm font-semibold transition cursor-pointer"
-                  >
-                    Check
-                  </button>
-                ) : (
-                  <button
-                    onClick={() => sendAction('call')}
-                    className="px-4 py-2 rounded-xl bg-sky-500 hover:bg-sky-400 text-zinc-950 text-sm font-semibold transition cursor-pointer"
-                  >
-                    Call ${Math.min(toCall, me?.chips ?? 0)}
-                  </button>
-                )}
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2">
-                {secondsLeft !== null && (
-                  <span
-                    className={`text-xs font-mono font-bold px-2.5 py-1 rounded-lg border ${
-                      secondsLeft <= 5
-                        ? 'bg-rose-500/20 text-rose-300 border-rose-500/40 animate-pulse'
-                        : 'bg-zinc-800 text-zinc-200 border-zinc-700'
+              {secondsLeft !== null && (
+                <div className="w-64 mx-auto h-1.5 rounded-full bg-zinc-800 overflow-hidden">
+                  <div
+                    className={`h-full transition-all duration-200 ${
+                      secondsLeft <= 10 ? 'bg-rose-500' : secondsLeft <= 15 ? 'bg-amber-400' : 'bg-emerald-400'
                     }`}
+                    style={{ width: `${Math.min(100, (secondsLeft / Math.max(1, gameState.turnTimeSeconds)) * 100)}%` }}
+                  />
+                </div>
+              )}
+
+              {!showRaiseTray ? (
+                <div className="max-w-md mx-auto grid grid-cols-3 gap-3">
+                  <button
+                    onClick={() => sendAction('fold')}
+                    className="py-2.5 px-4 rounded-xl bg-zinc-950 hover:bg-rose-950/60 text-rose-300 border border-rose-500/30 text-sm font-semibold transition cursor-pointer"
                   >
-                    {secondsLeft}s
-                  </span>
-                )}
-                {[
-                  { label: '1/2 Pot', mult: 0.5 },
-                  { label: '3/4 Pot', mult: 0.75 },
-                  { label: 'Pot', mult: 1 },
-                ].map((preset) => {
-                  const maxBet = (me?.chips ?? 0) + (me?.bet ?? 0);
-                  const target = Math.min(
-                    maxBet,
-                    Math.max(minRaiseTarget, gameState.currentBet + Math.round((gameState.pot * preset.mult) / 10) * 10)
-                  );
-                  return (
+                    Fold
+                  </button>
+                  {toCall === 0 ? (
                     <button
-                      key={preset.label}
-                      onClick={() => setRaiseAmount(target)}
-                      className="px-2.5 py-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium transition cursor-pointer"
+                      onClick={() => sendAction('check')}
+                      className="py-2.5 px-4 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-white border border-zinc-700 text-sm font-semibold transition cursor-pointer"
                     >
-                      {preset.label}
+                      Check
                     </button>
-                  );
-                })}
-                <input
-                  type="range"
-                  min={minRaiseTarget}
-                  max={(me?.chips ?? 0) + (me?.bet ?? 0)}
-                  step={10}
-                  value={Math.max(minRaiseTarget, raiseAmount)}
-                  onChange={(e) => setRaiseAmount(Number(e.target.value))}
-                  className="w-24 accent-emerald-500"
-                />
-                <button
-                  onClick={() => sendAction('raise', Math.max(minRaiseTarget, raiseAmount))}
-                  className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 text-sm font-semibold transition cursor-pointer"
-                >
-                  Raise ${Math.max(minRaiseTarget, raiseAmount)}
-                </button>
-                <button
-                  onClick={() => sendAction('allin')}
-                  className="px-3 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 text-sm font-semibold transition cursor-pointer"
-                >
-                  All-In
-                </button>
-              </div>
+                  ) : (
+                    <button
+                      onClick={() => sendAction('call')}
+                      className="py-2.5 px-4 rounded-xl bg-sky-500/15 hover:bg-sky-500/25 text-sky-300 border border-sky-500/40 text-sm font-semibold transition cursor-pointer"
+                    >
+                      Call ${Math.min(toCall, me?.chips ?? 0)}
+                    </button>
+                  )}
+                  <button
+                    onClick={() => setShowRaiseTray(true)}
+                    className="py-2.5 px-4 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 text-sm font-bold transition cursor-pointer"
+                  >
+                    Raise
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-2.5">
+                  <div className="flex flex-wrap items-center justify-center gap-2">
+                    {[
+                      { label: '1/2 Pot', mult: 0.5 },
+                      { label: '3/4 Pot', mult: 0.75 },
+                      { label: 'Pot', mult: 1 },
+                    ].map((preset) => {
+                      const maxBet = (me?.chips ?? 0) + (me?.bet ?? 0);
+                      const target = Math.min(
+                        maxBet,
+                        Math.max(
+                          minRaiseTarget,
+                          gameState.currentBet + Math.round((gameState.pot * preset.mult) / 10) * 10
+                        )
+                      );
+                      return (
+                        <button
+                          key={preset.label}
+                          onClick={() => setRaiseAmount(target)}
+                          className="px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 text-xs font-medium transition cursor-pointer"
+                        >
+                          {preset.label}
+                        </button>
+                      );
+                    })}
+                    <button
+                      onClick={() => {
+                        setShowRaiseTray(false);
+                        sendAction('allin');
+                      }}
+                      className="px-2.5 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/30 text-xs font-semibold transition cursor-pointer"
+                    >
+                      All-In
+                    </button>
+                  </div>
+
+                  <div className="flex items-center gap-2.5">
+                    <input
+                      type="range"
+                      min={minRaiseTarget}
+                      max={(me?.chips ?? 0) + (me?.bet ?? 0)}
+                      step={10}
+                      value={Math.max(minRaiseTarget, raiseAmount)}
+                      onChange={(e) => setRaiseAmount(Number(e.target.value))}
+                      className="flex-1 accent-emerald-500 cursor-pointer"
+                    />
+                    <span className="px-3 py-1.5 rounded-lg bg-zinc-950 border border-zinc-800 text-xs font-mono font-bold text-white">
+                      ${Math.max(minRaiseTarget, raiseAmount)}
+                    </span>
+                    <button
+                      onClick={() => {
+                        setShowRaiseTray(false);
+                        sendAction('raise', Math.max(minRaiseTarget, raiseAmount));
+                      }}
+                      className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-zinc-950 text-xs sm:text-sm font-bold transition cursor-pointer"
+                    >
+                      Subir a ${Math.max(minRaiseTarget, raiseAmount)}
+                    </button>
+                    <button
+                      onClick={() => setShowRaiseTray(false)}
+                      title="Volver"
+                      className="p-2 rounded-xl bg-zinc-800 hover:bg-zinc-700 text-zinc-300 cursor-pointer"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              )}
+
               {armedKey && (
                 <div className="w-full text-center text-[11px] text-amber-300 font-medium">
                   Pulsa <kbd className="px-1.5 py-0.5 rounded bg-zinc-800 border border-zinc-700 uppercase">{armedKey}</kbd> otra vez para confirmar

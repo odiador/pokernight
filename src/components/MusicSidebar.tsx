@@ -13,6 +13,7 @@ import {
   SkipForward,
   Users,
   Volume2,
+  VolumeX,
 } from 'lucide-react';
 import { X } from 'lucide-react';
 import type { GameState, MusicMode, PlaylistTrack } from '../../shared/poker.ts';
@@ -26,6 +27,7 @@ interface MusicSidebarProps {
   isOwner: boolean;
   clockOffset: number;
   onToggleMusic: () => void;
+  onToggleRoomPause: () => void;
   onSelectMode: (mode: MusicMode) => void;
   onUpdatePlaylist: (playlist: PlaylistTrack[], currentIndex: number) => void;
   onSeek: (seconds: number) => void;
@@ -56,6 +58,7 @@ export function MusicSidebar({
   isOwner,
   clockOffset,
   onToggleMusic,
+  onToggleRoomPause,
   onSelectMode,
   onUpdatePlaylist,
   onSeek,
@@ -87,16 +90,22 @@ export function MusicSidebar({
   const currentIndex = gameState.music?.currentIndex ?? 0;
   const currentTrack = playlist[currentIndex];
   const startedAt = gameState.music?.startedAt ?? 0;
+  const roomPaused = Boolean(gameState.music?.paused);
+  const isPlayingActive = musicOn && !roomPaused;
 
   const getExpectedSeconds = () =>
-    startedAt ? Math.max(0, Math.floor((Date.now() + clockOffset - startedAt) / 1000)) : 0;
+    roomPaused
+      ? gameState.music?.pausedAtSec ?? 0
+      : startedAt
+      ? Math.max(0, Math.floor((Date.now() + clockOffset - startedAt) / 1000))
+      : 0;
 
   const seekIframeTo = (sec: number) => {
     iframeRef.current?.contentWindow?.postMessage(
       JSON.stringify({ event: 'command', func: 'seekTo', args: [sec, true] }),
       '*'
     );
-    if (musicOn) {
+    if (isPlayingActive) {
       iframeRef.current?.contentWindow?.postMessage(
         JSON.stringify({ event: 'command', func: 'playVideo', args: [] }),
         '*'
@@ -112,14 +121,14 @@ export function MusicSidebar({
     seekIframeTo(expected);
   }, [startedAt, ncsMode]);
 
-  // Play / pause sync
+  // Play / pause sync (shared room state + local musicOn)
   useEffect(() => {
     if (ncsMode === 'lounge') return;
     iframeRef.current?.contentWindow?.postMessage(
-      JSON.stringify({ event: 'command', func: musicOn ? 'playVideo' : 'pauseVideo', args: [] }),
+      JSON.stringify({ event: 'command', func: isPlayingActive ? 'playVideo' : 'pauseVideo', args: [] }),
       '*'
     );
-  }, [musicOn, ncsMode]);
+  }, [isPlayingActive, ncsMode]);
 
   // Reset track metadata + show toast on song change
   useEffect(() => {
@@ -154,7 +163,7 @@ export function MusicSidebar({
         if (typeof ytTime === 'number' && seekDraft === null) {
           const expected = getExpectedSeconds();
           // If client drifted > 2.5s from server wall-clock (e.g. slow load), snap back in sync
-          if (musicOn && Math.abs(ytTime - expected) > 2.5 && Date.now() - lastDriftFixRef.current > 4000) {
+          if (isPlayingActive && Math.abs(ytTime - expected) > 2.5 && Date.now() - lastDriftFixRef.current > 4000) {
             lastDriftFixRef.current = Date.now();
             seekIframeTo(expected);
             setElapsedSec(expected);
@@ -168,16 +177,17 @@ export function MusicSidebar({
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [startedAt, clockOffset, seekDraft, musicOn, currentTrack?.id, currentIndex, playlist.length]);
+  }, [startedAt, clockOffset, seekDraft, isPlayingActive, currentTrack?.id, currentIndex, playlist.length]);
 
-  // Persist volume
+  // Persist volume (effectiveVolume = 0 when locally muted via musicOn === false)
   useEffect(() => {
     localStorage.setItem('pokernight_volume', String(volume));
+    const effective = musicOn ? volume : 0;
     iframeRef.current?.contentWindow?.postMessage(
-      JSON.stringify({ event: 'command', func: 'setVolume', args: [volume] }),
+      JSON.stringify({ event: 'command', func: 'setVolume', args: [effective] }),
       '*'
     );
-  }, [volume]);
+  }, [volume, musicOn]);
 
   // Live YouTube search
   useEffect(() => {
@@ -438,11 +448,11 @@ export function MusicSidebar({
                   <SkipBack className="w-5 h-5 fill-current" />
                 </button>
                 <button
-                  onClick={onToggleMusic}
+                  onClick={onToggleRoomPause}
                   className="w-11 h-11 rounded-full bg-zinc-100 hover:bg-white text-zinc-950 flex items-center justify-center shadow-lg transition cursor-pointer"
-                  title={musicOn ? 'Pausar' : 'Reproducir'}
+                  title={isPlayingActive ? 'Pausar para la sala' : 'Reanudar para la sala'}
                 >
-                  {musicOn ? <Pause className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current ml-0.5" />}
+                  {isPlayingActive ? <Pause className="w-5 h-5 fill-current" /> : <Play className="w-5 h-5 fill-current ml-0.5" />}
                 </button>
                 <button
                   onClick={() => {
@@ -458,7 +468,14 @@ export function MusicSidebar({
               </div>
 
               <div className="flex items-center gap-2 pt-1">
-                <Volume2 className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+                <button
+                  type="button"
+                  onClick={onToggleMusic}
+                  title={musicOn ? 'Silenciar localmente' : 'Activar audio local'}
+                  className="text-zinc-400 hover:text-white shrink-0 cursor-pointer"
+                >
+                  {musicOn && volume > 0 ? <Volume2 className="w-3.5 h-3.5 text-emerald-400" /> : <VolumeX className="w-3.5 h-3.5 text-rose-400" />}
+                </button>
                 <input
                   type="range"
                   min={0}

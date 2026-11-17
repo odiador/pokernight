@@ -70,23 +70,120 @@ class LoungeMusicPlayer {
 
 export const loungeMusic = new LoungeMusicPlayer();
 
-export function playClockTick(urgent = false): void {
+let sfxCtx: AudioContext | null = null;
+function getSfxContext(): AudioContext | null {
   try {
-    const AudioCtx = window.AudioContext;
-    if (!AudioCtx) return;
-    const ctx = new AudioCtx();
+    if (!sfxCtx) sfxCtx = new AudioContext();
+    if (sfxCtx.state === 'suspended') void sfxCtx.resume();
+    return sfxCtx;
+  } catch {
+    return null;
+  }
+}
+
+export function playClockTick(urgent = false): void {
+  const ctx = getSfxContext();
+  if (!ctx) return;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(urgent ? 980 : 720, ctx.currentTime);
+  gain.gain.setValueAtTime(0.06, ctx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.06);
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.start();
+  osc.stop(ctx.currentTime + 0.07);
+}
+
+export function playDealSound(): void {
+  const ctx = getSfxContext();
+  if (!ctx) return;
+  const now = ctx.currentTime;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = 'triangle';
+  osc.frequency.setValueAtTime(240, now);
+  osc.frequency.exponentialRampToValueAtTime(520, now + 0.07);
+  gain.gain.setValueAtTime(0.045, now);
+  gain.gain.exponentialRampToValueAtTime(0.001, now + 0.08);
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.start(now);
+  osc.stop(now + 0.09);
+}
+
+export function playChipSound(): void {
+  const ctx = getSfxContext();
+  if (!ctx) return;
+  const now = ctx.currentTime;
+  [1200, 1650].forEach((freq, i) => {
+    const t = now + i * 0.045;
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = 'sine';
-    osc.frequency.setValueAtTime(urgent ? 980 : 720, ctx.currentTime);
-    gain.gain.setValueAtTime(0.06, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.06);
+    osc.frequency.setValueAtTime(freq, t);
+    gain.gain.setValueAtTime(0.05, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.055);
     osc.connect(gain);
     gain.connect(ctx.destination);
-    osc.start();
-    osc.stop(ctx.currentTime + 0.07);
-    setTimeout(() => void ctx.close(), 120);
-  } catch {
-    // Ignore audio context errors
-  }
+    osc.start(t);
+    osc.stop(t + 0.06);
+  });
+}
+
+export function playCheckSound(): void {
+  const ctx = getSfxContext();
+  if (!ctx) return;
+  const now = ctx.currentTime;
+  [0, 0.11].forEach((offset) => {
+    const t = now + offset;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(180, t);
+    osc.frequency.exponentialRampToValueAtTime(85, t + 0.06);
+    gain.gain.setValueAtTime(0.07, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.065);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(t);
+    osc.stop(t + 0.07);
+  });
+}
+
+export function playFoldSound(): void {
+  const ctx = getSfxContext();
+  if (!ctx) return;
+  const now = ctx.currentTime;
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+  osc.type = 'triangle';
+  osc.frequency.setValueAtTime(320, now);
+  osc.frequency.exponentialRampToValueAtTime(140, now + 0.14);
+  gain.gain.setValueAtTime(0.045, now);
+  gain.gain.exponentialRampToValueAtTime(0.001, now + 0.15);
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+  osc.start(now);
+  osc.stop(now + 0.16);
+}
+
+export function playWinSound(): void {
+  const ctx = getSfxContext();
+  if (!ctx) return;
+  const now = ctx.currentTime;
+  [523.25, 659.25, 783.99, 1046.5].forEach((freq, i) => {
+    const t = now + i * 0.08;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(freq, t);
+    gain.gain.setValueAtTime(0.055, t);
+    gain.gain.exponentialRampToValueAtTime(0.001, t + 0.28);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(t);
+    osc.stop(t + 0.3);
+  });
 }

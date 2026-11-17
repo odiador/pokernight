@@ -7,6 +7,7 @@ interface PlayingCardProps {
   small?: boolean;
   index?: number;
   isCommunity?: boolean;
+  highlighted?: boolean;
 }
 
 const SUIT_SYMBOL: Record<Card['suit'], string> = {
@@ -22,6 +23,7 @@ export function PlayingCard({
   small = false,
   index = 0,
   isCommunity = false,
+  highlighted = false,
 }: PlayingCardProps) {
   const sizeClasses = small ? 'w-11 h-16 text-xs rounded-lg' : 'w-16 h-24 text-base rounded-xl';
   const isRed = card && (card.suit === 'hearts' || card.suit === 'diamonds');
@@ -37,7 +39,7 @@ export function PlayingCard({
       }}
       animate={{
         opacity: 1,
-        y: 0,
+        y: highlighted ? -6 : 0,
         scale: 1,
         rotateY: 0,
       }}
@@ -49,9 +51,11 @@ export function PlayingCard({
         delay: index * 0.09,
       }}
       style={{ transformStyle: 'preserve-3d', perspective: 1000 }}
-      className={`${sizeClasses} relative select-none shadow-lg border ${
+      className={`${sizeClasses} relative select-none shadow-lg border transition-shadow ${
         !showFace
           ? 'bg-gradient-to-br from-indigo-900 via-slate-900 to-indigo-950 border-indigo-400/30'
+          : highlighted
+          ? 'bg-amber-50 border-amber-400 ring-2 ring-amber-400 shadow-[0_0_22px_rgba(251,191,36,0.55)]'
           : 'bg-zinc-50 border-zinc-200'
       } flex flex-col justify-between p-1.5 font-bold`}
     >

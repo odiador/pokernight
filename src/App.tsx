@@ -5,7 +5,23 @@ import type { ClientMessage, GameState, MusicMode, PlayerAction, PlaylistTrack, 
 import { evaluateCurrentHand } from '../shared/evaluator.ts';
 import { PlayingCard } from './components/PlayingCard.tsx';
 import { MusicSidebar } from './components/MusicSidebar.tsx';
-import { loungeMusic, playClockTick } from './utils/music.ts';
+import {
+  loungeMusic,
+  playCheckSound,
+  playChipSound,
+  playClockTick,
+  playDealSound,
+  playFoldSound,
+  playWinSound,
+} from './utils/music.ts';
+
+function getOrCreateClientId(): string {
+  const existing = localStorage.getItem('pokernight_client_id');
+  if (existing) return existing;
+  const created = `c-${Math.random().toString(36).slice(2, 10)}-${Date.now().toString(36)}`;
+  localStorage.setItem('pokernight_client_id', created);
+  return created;
+}
 
 function generateRoomCode(): string {
   return String(Math.floor(1000 + Math.random() * 9000));
@@ -51,8 +67,18 @@ export default function App() {
   const [clockOffset, setClockOffset] = useState(0);
   const [raiseAmount, setRaiseAmount] = useState(40);
   const [copiedInvite, setCopiedInvite] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const kickedRef = useRef(false);
+  const manualCloseRef = useRef(false);
+  const lastSoundSnapRef = useRef<{
+    handNumber: number;
+    communityLen: number;
+    winnersLen: number;
+    actions: Record<string, string | undefined>;
+  }>({ handNumber: 0, communityLen: 0, winnersLen: 0, actions: {} });
 
   useEffect(() => {
     if (!invitedRoom) return;
@@ -66,16 +92,24 @@ export default function App() {
       .catch(() => {});
   }, [invitedRoom]);
 
-  const connectAndJoin = (spectate = false) => {
+  const connectAndJoin = (spectate = false, isRetry = false) => {
     const cleanName = playerName.trim();
     if (!cleanName) {
       setError('Ingresa tu nombre para entrar a la mesa.');
       return;
     }
     localStorage.setItem('pokernight_player_name', cleanName);
-    setError(null);
-    loungeMusic.start();
-    setMusicOn(true);
+    if (!isRetry) {
+      kickedRef.current = false;
+      manualCloseRef.current = false;
+      setError(null);
+      loungeMusic.start();
+      setMusicOn(true);
+    }
+    if (reconnectTimerRef.current) {
+      clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
     const targetRoom = roomId.trim() || 'mesa-vip';
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const ws = new WebSocket(`${protocol}//${window.location.host}/ws?room=${encodeURIComponent(targetRoom)}`);
@@ -84,6 +118,7 @@ export default function App() {
     let pingInterval: ReturnType<typeof setInterval> | null = null;
 
     ws.onopen = () => {
+      setReconnecting(false);
       pingInterval = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN) {
           ws.send('ping');
@@ -109,6 +144,7 @@ export default function App() {
         turnTimeSeconds,
         spectate,
         initialPlaylist,
+        clientId: getOrCreateClientId(),
       };
       ws.send(JSON.stringify(msg));
     };
@@ -125,25 +161,78 @@ export default function App() {
         setRaiseAmount(msg.state.currentBet + msg.state.minRaise);
         setNcsMode(msg.state.music?.mode ?? 'lounge');
       } else if (msg.type === 'error') {
+        if (msg.message.toLowerCase().includes('expulsado')) {
+          kickedRef.current = true;
+        }
         setError(msg.message);
       }
     };
 
     ws.onerror = () => {
-      setError('No se pudo conectar al servidor WebSocket.');
+      if (!isRetry) setError('No se pudo conectar al servidor WebSocket.');
     };
 
-    ws.onclose = () => {
+    ws.onclose = (ev) => {
       if (pingInterval) clearInterval(pingInterval);
-      setGameState(null);
+      if (manualCloseRef.current || kickedRef.current || ev.code === 4001) {
+        setReconnecting(false);
+        setGameState(null);
+        return;
+      }
+      if (ev.code !== 4000) {
+        setReconnecting(true);
+        reconnectTimerRef.current = setTimeout(() => {
+          connectAndJoin(spectate, true);
+        }, 1500);
+      }
     };
   };
 
   useEffect(() => {
     return () => {
+      manualCloseRef.current = true;
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
       wsRef.current?.close();
     };
   }, []);
+
+  // Sync Lounge WebAudio synth with shared room pause & local mute
+  useEffect(() => {
+    if (!gameState) return;
+    if (ncsMode === 'lounge' && musicOn && !gameState.music?.paused) {
+      loungeMusic.start();
+    } else {
+      loungeMusic.stop();
+    }
+  }, [ncsMode, musicOn, gameState?.music?.paused, Boolean(gameState)]);
+
+  // Table SFX based on GameState transitions
+  useEffect(() => {
+    if (!gameState) return;
+    const prev = lastSoundSnapRef.current;
+    if (gameState.handNumber > prev.handNumber || gameState.communityCards.length > prev.communityLen) {
+      playDealSound();
+    }
+    if (gameState.winners.length > 0 && prev.winnersLen === 0) {
+      playWinSound();
+    }
+    const nextActions: Record<string, string | undefined> = {};
+    for (const p of gameState.players) {
+      nextActions[p.id] = p.lastAction;
+      if (p.lastAction && p.lastAction !== prev.actions[p.id]) {
+        const lower = p.lastAction.toLowerCase();
+        if (lower.includes('fold')) playFoldSound();
+        else if (lower.includes('check')) playCheckSound();
+        else if (lower.includes('call') || lower.includes('raise') || lower.includes('all-in')) playChipSound();
+      }
+    }
+    lastSoundSnapRef.current = {
+      handNumber: gameState.handNumber,
+      communityLen: gameState.communityCards.length,
+      winnersLen: gameState.winners.length,
+      actions: nextActions,
+    };
+  }, [gameState]);
 
   useEffect(() => {
     if (!gameState?.turnDeadline) {
@@ -396,6 +485,11 @@ export default function App() {
           <span className="text-xs px-2.5 py-1 rounded-full bg-zinc-900 border border-zinc-800 text-zinc-400 uppercase">
             {gameState.phase}
           </span>
+          {reconnecting && (
+            <span className="text-xs px-2.5 py-1 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-300 animate-pulse">
+              Reconectando...
+            </span>
+          )}
           {secondsLeft !== null && gameState.phase !== 'waiting' && gameState.phase !== 'showdown' && (
             <span
               className={`flex items-center gap-1.5 text-xs font-mono font-bold px-2.5 py-1 rounded-full border ${
@@ -471,23 +565,33 @@ export default function App() {
           </div>
 
           {/* Community Cards */}
-          <div className="flex items-center justify-center gap-2.5 min-h-[96px]">
-            <AnimatePresence>
-              {gameState.communityCards.map((card, i) => (
-                <PlayingCard
-                  key={`${gameState.handNumber}-${card.rank}-${card.suit}-${i}`}
-                  card={card}
-                  index={i}
-                  isCommunity
-                />
-              ))}
-            </AnimatePresence>
-            {gameState.communityCards.length === 0 && (
-              <span className="text-xs text-emerald-200/40 tracking-widest uppercase">
-                Cartas comunitarias
-              </span>
-            )}
-          </div>
+          {(() => {
+            const winningSet = new Set(
+              gameState.phase === 'showdown'
+                ? gameState.winners.flatMap((w) => (w.winningCards ?? []).map((c) => `${c.rank}-${c.suit}`))
+                : []
+            );
+            return (
+              <div className="flex items-center justify-center gap-2.5 min-h-[96px]">
+                <AnimatePresence>
+                  {gameState.communityCards.map((card, i) => (
+                    <PlayingCard
+                      key={`${gameState.handNumber}-${card.rank}-${card.suit}-${i}`}
+                      card={card}
+                      index={i}
+                      isCommunity
+                      highlighted={winningSet.has(`${card.rank}-${card.suit}`)}
+                    />
+                  ))}
+                </AnimatePresence>
+                {gameState.communityCards.length === 0 && (
+                  <span className="text-xs text-emerald-200/40 tracking-widest uppercase">
+                    Cartas comunitarias
+                  </span>
+                )}
+              </div>
+            );
+          })()}
 
           {myHandName && (
             <motion.div
@@ -522,6 +626,11 @@ export default function App() {
               gameState.phase !== 'showdown';
             const isMe = p.id === yourId;
             const showCards = isMe || (gameState.phase === 'showdown' && (!p.folded || p.showCards));
+            const winningSet = new Set(
+              gameState.phase === 'showdown'
+                ? gameState.winners.flatMap((w) => (w.winningCards ?? []).map((c) => `${c.rank}-${c.suit}`))
+                : []
+            );
 
             return (
               <div
@@ -538,6 +647,7 @@ export default function App() {
                   <span className="text-xs font-semibold truncate text-white">
                     {p.id === gameState.ownerId ? '👑 ' : ''}
                     {p.name} {isMe && '(Tú)'}
+                    {p.disconnected && <span className="ml-1 text-[10px] text-amber-400">(Desconectado)</span>}
                   </span>
                   <div className="flex items-center gap-1">
                     {idx === gameState.dealerIndex && (
@@ -579,6 +689,7 @@ export default function App() {
                         hidden={!showCards}
                         small
                         index={ci}
+                        highlighted={showCards && winningSet.has(`${c.rank}-${c.suit}`)}
                       />
                     ))}
                   </AnimatePresence>
@@ -610,13 +721,8 @@ export default function App() {
         ncsMode={ncsMode}
         isOwner={isOwner}
         clockOffset={clockOffset}
-        onToggleMusic={() => {
-          if (ncsMode === 'lounge') {
-            setMusicOn(loungeMusic.toggle());
-          } else {
-            setMusicOn((v) => !v);
-          }
-        }}
+        onToggleMusic={() => setMusicOn((v) => !v)}
+        onToggleRoomPause={() => send({ type: 'toggle_music_pause' })}
         onSelectMode={(mode) => {
           send({ type: 'set_music', mode });
           setNcsMode(mode);
